@@ -10,7 +10,7 @@ typedef struct _fs_prefix {
     char prefix[FS_MAX_PREFIX_LENGTH+1];
 } fs_prefix;
 
-fs_prefix_trie *fs_prefix_trie_new();
+fs_prefix_trie *fs_prefix_trie_new(void);
 
 int fs_prefix_trie_add_string(fs_prefix_trie *t, const char *str);
 
