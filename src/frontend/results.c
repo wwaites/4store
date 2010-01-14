@@ -65,7 +65,7 @@ gboolean rid_equal(gconstpointer va, gconstpointer vb)
 }
 
 /* must hold mutex to call this function */
-static void setup_l1_cache()
+static void setup_l1_cache(void)
 {
     res_l1_cache = g_hash_table_new_full(rid_hash, rid_equal, NULL, NULL);
 }
@@ -380,6 +380,14 @@ fs_value fs_expression_eval(fs_query *q, int row, int block, rasqal_expression *
             fs_value v = fs_value_integer(1);
             return v;
         }
+
+        case RASQAL_EXPR_SUM:
+        case RASQAL_EXPR_AVG:
+        case RASQAL_EXPR_MIN:
+        case RASQAL_EXPR_MAX:
+        case RASQAL_EXPR_LAST:
+            return fs_value_error(FS_ERROR_INVALID_TYPE, "unsupported aggregate operation");
+
 #endif
 
 	case RASQAL_EXPR_UNKNOWN:
