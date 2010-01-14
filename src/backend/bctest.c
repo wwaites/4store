@@ -27,7 +27,7 @@
 
 #define NAME "test"
 
-int main()
+int main(int argc, char *argv[])
 {
     fs_rid a = 0x0123456789abcdefLL;
     fs_rid b = 0xfedcba9876543210LL;
