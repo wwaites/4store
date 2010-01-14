@@ -85,7 +85,7 @@ static void query_log_open (const char *kb_name)
   g_free(filename);
 }
 
-static void query_log_close ()
+static void query_log_close (void)
 {
   if (ql_file) {
     fclose(ql_file);
@@ -93,7 +93,7 @@ static void query_log_close ()
   }
 }
 
-static void query_log_reopen ()
+static void query_log_reopen (void)
 {
   query_log_close();
   query_log_open(fsp_kb_name(fsplink));
