@@ -25,7 +25,7 @@
 #define ROWS 20443501
 //#define ROWS 3000
 
-int main()
+int main(int argc, char *argv[])
 {
     char *filename = g_strdup_printf("/tmp/test-%d.list", (int)getpid());
     fs_list *l = fs_list_open_filename(filename, sizeof(fs_rid) * 4, O_CREAT | O_TRUNC | O_RDWR);
