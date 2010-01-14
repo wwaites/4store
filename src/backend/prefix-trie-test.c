@@ -21,7 +21,7 @@
 
 #define CODE(x) code = fs_prefix_trie_get_code(t, x, &plen); printf("code("x") = %d [%s]%s\n", code, code ? pr[code-1].prefix : "", x+plen)
 
-int main()
+int main(int argc, char *argv[])
 {
     fs_prefix_trie *t = fs_prefix_trie_new();
 
