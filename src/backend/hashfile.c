@@ -3,7 +3,6 @@
 #include <unistd.h>
 #include <string.h>
 #include "hashfile.h"
-#include "sync.h"
 #include "common/error.h"
 
 extern int errno;
