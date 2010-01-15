@@ -250,6 +250,9 @@ int fs_quad_import_commit(fs_backend *be, int seg, int flags, int account)
 
     TIME(NULL);
 
+    if (fs_hashfile_lock(be->models, LOCK_EX))
+        return 4;
+
     if (be->pended_import) {
 	for (int i=0; i<quad_pos; i++) {
 	    if (quad_buffer[i].skip) continue;
@@ -329,7 +332,7 @@ int fs_quad_import_commit(fs_backend *be, int seg, int flags, int account)
 	    tl = NULL;
 	    model_node = 0;
 	    fs_index_node node = 0;
-	    if (fs_mhash_get(be->models, model, &node)) {
+	    if (fs_mhash_get_r(be->models, model, &node)) {
 		fs_error(LOG_ERR, "failed to get node for model %016llx",
 			 model);
 	    }
@@ -341,7 +344,7 @@ int fs_quad_import_commit(fs_backend *be, int seg, int flags, int account)
 	    } else if (node == 0) {
 		if (fs_backend_model_files(be)) {
 		    tl = fs_tlist_open(be, model, O_CREAT | O_RDWR);
-		    fs_mhash_put(be->models, model, 1);
+		    fs_mhash_put_r(be->models, model, 1);
 		} else {
 		    model_node = node;
 		}
@@ -356,20 +359,24 @@ int fs_quad_import_commit(fs_backend *be, int seg, int flags, int account)
 	} else {
 	    if (!model_node) {
 		model_node = fs_tbchain_new_chain(be->model_list);
-		fs_mhash_put(be->models, model, model_node);
+		fs_mhash_put_r(be->models, model, model_node);
 	    }
 	    fs_index_node new_node = fs_tbchain_add_triple(be->model_list,
 		model_node, &quad_buffer[i].quad[1]);
 	    if (new_node != model_node) {
 		model_node = new_node;
-		fs_mhash_put(be->models, model, model_node);
+		fs_mhash_put_r(be->models, model, model_node);
 	    }
 	}
     }
     if (tl) {
 	fs_tlist_close(tl);
     }
-    
+
+    /* tsk tsk check return values */
+    fs_hashfile_sync(be->models);
+    fs_hashfile_lock(be->models, LOCK_UN);
+        
     TIME("list append");
 
     quad_pos = 0;
@@ -439,6 +446,9 @@ int fs_delete_models(fs_backend *be, int seg, fs_rid_vector *mvec)
     double then = fs_time();
     int errs = 0;
 
+    if (fs_hashfile_lock(be->models, LOCK_EX))
+        return -1;
+
     fs_rid_vector *todo = fs_rid_vector_new(0);
     for (int i=0; i<mvec->length; i++) {
         fs_rid model = mvec->data[i];
@@ -460,6 +470,7 @@ int fs_delete_models(fs_backend *be, int seg, fs_rid_vector *mvec)
     }
 
     if (todo->data[0] == FS_RID_NULL) {
+        /* no need to release locks - closing the files will do that */
         fs_backend_unlink_indexes(be, seg);
         fs_backend_close_files(be, seg);
         errs += fs_backend_open_files(be, seg, O_RDWR | O_CREAT | O_TRUNC, FS_OPEN_ALL);
@@ -472,7 +483,7 @@ int fs_delete_models(fs_backend *be, int seg, fs_rid_vector *mvec)
      * small graph in a large KB */
     if (todo->length == 1) {
         fs_index_node val = 0;
-        fs_mhash_get(be->models, todo->data[0], &val);
+        fs_mhash_get_r(be->models, todo->data[0], &val);
         /* we don't handle the tlist case, and we only want to handle
          * graphs that are less than 1% of the total size, or really small
          * this way */
@@ -491,7 +502,7 @@ int fs_delete_models(fs_backend *be, int seg, fs_rid_vector *mvec)
 
     for (int i=0; i<todo->length; i++) {
         fs_index_node val = 0;
-        fs_mhash_get(be->models, todo->data[i], &val);
+        fs_mhash_get_r(be->models, todo->data[i], &val);
         if (val == 1) {
 	    fs_tlist *tl = fs_tlist_open(be, todo->data[i], O_RDWR);
 	    if (tl) {
@@ -523,7 +534,9 @@ int fs_delete_models(fs_backend *be, int seg, fs_rid_vector *mvec)
     }
 
     fs_rid_vector_free(todo);
-    fs_mhash_flush(be->models);
+
+    errs += fs_hashfile_sync(be->models);
+    errs += fs_hashfile_lock(be->models, LOCK_UN);
 
     double now = fs_time();
     be->in_time[seg].remove += now - then;

@@ -14,6 +14,7 @@
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
+#include <unistd.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <glib.h>
@@ -24,28 +25,34 @@
 
 int main(int argc, char *argv[])
 {
-	fs_mhash *rh = fs_mhash_open_filename("/tmp/test.mhash", O_RDWR | O_CREAT | O_TRUNC);
+	fs_hashfile_t *rh = fs_mhash_open_filename("/tmp/test.mhash", O_RDWR | O_CREAT | O_TRUNC);
 	fs_mhash_put(rh, 1, 23);
 	fs_mhash_put(rh, 2, 93);
 	fs_mhash_put(rh, 23, 101);
 	fs_index_node val;
 	fs_mhash_get(rh, 1, &val);
 	printf("GOT 23 -> %d\n", val);
+
 	double then = fs_time();
+        fs_hashfile_lock(rh, LOCK_EX);
 	for (int i=0; i<ITS; i++) {
 		fs_rid rid = i * 6556708946546543 + 23;
-		if (fs_mhash_put(rh, rid, i)) {
+		if (fs_mhash_put_r(rh, rid, i)) {
 			printf("error @ %d\n", i);
 
 			return 1;
 		}
 	}
+        fs_hashfile_sync(rh);
+        fs_hashfile_lock(rh, LOCK_UN);
 	double now = fs_time();
+        
 	printf("wrote model entries, %f models/s\n", (double)ITS/(now-then));
 	then = fs_time();
+        fs_hashfile_lock(rh, LOCK_SH);
 	for (int i=0; i<ITS; i++) {
 		fs_rid rid = i * 6556708946546543 + 23;
-		if (fs_mhash_get(rh, rid, &val)) {
+		if (fs_mhash_get_r(rh, rid, &val)) {
 			printf("error @ %d\n", i);
 
 			return 1;
@@ -56,6 +63,7 @@ int main(int argc, char *argv[])
 			return 2;
 		}
 	}
+        fs_hashfile_lock(rh, LOCK_UN);
 	now = fs_time();
 	printf("read resources, %f res/s\n", (double)ITS/(now-then));
 	fs_mhash_close(rh);

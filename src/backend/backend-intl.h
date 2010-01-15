@@ -31,7 +31,7 @@ struct _fs_backend {
     fs_list *pending_delete;
     fs_list *pending_insert;
     fs_rhash *res;
-    fs_mhash *models;
+    fs_hashfile_t *models;
     fs_tbchain *model_list;
     fs_list *predicates;
     fs_ptable *pairs;

@@ -30,6 +30,7 @@
 #include "backend.h"
 #include "ptree.h"
 #include "chain.h"
+#include "sync.h"
 #include "common/params.h"
 #include "common/hash.h"
 #include "common/error.h"

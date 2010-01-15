@@ -54,61 +54,6 @@ int fs_lock_kb(const char *kb)
     return 0;
 }           
 
-int fs_lock(fs_backend *be, const char *name, fs_lock_action action, int block)
-{
-    char *fn = g_strdup_printf(FS_FILE_LOCK, fs_backend_get_kb(be), fs_backend_get_segment(be), name);
-    int ret = -1;
-    int fd;
-
-    switch (action) {
-    case FS_LOCK_SHARED:
-        fs_error(LOG_CRIT, "shared locks not implemented");
-        break;
-
-    case FS_LOCK_EXCLUSIVE:
-        fd = open(fn, FS_O_NOATIME | O_RDWR | O_CREAT | O_EXCL, 0600);
-        if (fd == -1 && errno == EEXIST) {
-            if (block) {
-                fs_error(LOG_CRIT, "blocking locks not supported");
-                close(fd);
-
-                break;
-            }
-            ret = 1;
-            close(fd);
-
-            break;
-        }
-        ret = 0;
-        close(fd);
-
-        break;
-
-    case FS_LOCK_RELEASE:
-        unlink(fn);
-        ret = 0;
-
-        break;
-    }
-
-    g_free(fn);
-
-    return ret;
-}
-
-int fs_lock_taken(fs_backend *be, const char *name)
-{
-    struct stat junk;
-    char *fn = g_strdup_printf(FS_FILE_LOCK, fs_backend_get_kb(be), fs_backend_get_segment(be), name);
-    int ret = stat(fn, &junk);
-    g_free(fn);
-    if (ret == -1 && errno == ENOENT) {
-        return 0;
-    }
-
-    return 1;
-}
-
 int fs_flock_logged(int fd, int op, const char *file, int line)
 {
     char opstr[8] = { 0, 0, 0, 0, 0 };

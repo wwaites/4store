@@ -32,6 +32,8 @@
 #include "backend.h"
 #include "rhash.h"
 #include "list.h"
+#include "sync.h"
+#include "hashfile.h"
 #include "prefix-trie.h"
 #include "common/params.h"
 #include "common/hash.h"

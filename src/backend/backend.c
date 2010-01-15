@@ -264,11 +264,12 @@ void fs_backend_set_min_free(fs_backend *be, float min_free)
 
 int fs_start_import(fs_backend *be, int seg)
 {
-    int errs = 0;
-
     /* TODO update metadata ? */
-
-    return errs;
+    if (!be->models) {
+        fs_error(LOG_ERR, "start import, no models");
+        return -1;
+    }
+    return fs_hashfile_lock(be->models, LOCK_EX);
 }
 
 void fs_backend_ptree_limited_open(fs_backend *be, int n)
@@ -392,7 +393,8 @@ int fs_stop_import(fs_backend *be, int seg)
 
     fs_rhash_flush(be->res);
     if (be->models) {
-	fs_mhash_flush(be->models);
+	fs_hashfile_sync(be->models);
+        fs_hashfile_lock(be->models, LOCK_UN);
     }
 
     int ret = fs_commit(be, seg, 0);
@@ -411,17 +413,17 @@ int fs_backend_transaction(fs_backend *be, fs_segment seg, int op)
     return 1;
 }
 
+/* must be called while holding read lock */
 int fs_backend_model_get_usage(fs_backend *be, int seg, fs_rid model, fs_index_node *val)
 {
     if (!be->models) {
 	fs_error(LOG_ERR, "model hash not open");
     }
 
-    int ret = fs_mhash_get(be->models, model, val);
-
-    return ret;
+    return fs_mhash_get_r(be->models, model, val);
 }
 
+/* must be called while holding write lock */
 int fs_backend_model_set_usage(fs_backend *be, int seg, fs_rid model, fs_index_node val)
 {
     int ret = 0;
@@ -436,11 +438,11 @@ int fs_backend_model_set_usage(fs_backend *be, int seg, fs_rid model, fs_index_n
 	}
     } else {
 	fs_index_node mval = 0;
-	if (fs_mhash_get(be->models, model, &mval)) {
+	if (fs_mhash_get_r(be->models, model, &mval)) {
 	    fs_error(LOG_ERR, "fs_mhash_get on %016llx failed", model);
 	}
 	if (mval != val) {
-	    ret = fs_mhash_put(be->models, model, val);
+	    ret = fs_mhash_put_r(be->models, model, val);
 	    if (val == 1) {
 		fs_tlist *tl = fs_tlist_open(be, model, O_CREAT | O_RDWR);
 		if (tl) {
@@ -525,7 +527,7 @@ int fs_backend_open_files_intl(fs_backend *be, fs_segment seg, int flags, int fi
 
     be->segment = seg;
     if (!be->checked_transaction) {
-	be->transaction = fs_lock_taken(be, "trans");
+	be->transaction = 0; //fs_lock_taken(be, "trans");
 	be->checked_transaction = 1;
     }
 

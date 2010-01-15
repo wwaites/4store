@@ -29,7 +29,7 @@
 #include <sys/file.h>
 
 #include "list.h"
-#include "lock.h"
+#include "sync.h"
 #include "common/error.h"
 #include "common/timing.h"
 
