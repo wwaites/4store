@@ -391,8 +391,6 @@ int fs_stop_import(fs_backend *be, int seg)
 	return 0;
     }
 
-    fs_rhash_flush(be->res);
-
     int ret = fs_commit(be, seg, 0);
     double now = fs_time();
     be->in_time[seg].rebuild += now - then;

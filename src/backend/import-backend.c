@@ -99,12 +99,14 @@ int fs_res_import(fs_backend *be, int seg, long count, fs_resource buffer[])
 
 int fs_res_import_commit(fs_backend *be, int seg, int account)
 {
+    fs_assert(fs_lockable_test(be->res, LOCK_EX));
+
     if (seg < 0 || seg >= be->segments) {
 	fs_error(LOG_ERR, "segment number %d out of range", seg);
     }
     double then = fs_time();
 
-    fs_rhash_put_multi(be->res, res_buffer, res_pos);
+    fs_rhash_put_multi_r(be->res, res_buffer, res_pos);
     for (int i=0; i<res_pos; i++) {
 	g_free(res_buffer[i].lex);
     }

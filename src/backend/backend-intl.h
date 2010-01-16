@@ -30,7 +30,7 @@ struct _fs_backend {
     FILE *lex_f;
     fs_list *pending_delete;
     fs_list *pending_insert;
-    fs_rhash *res;
+    fs_lockable_t *res;
     fs_lockable_t *models;
     fs_tbchain *model_list;
     fs_list *predicates;

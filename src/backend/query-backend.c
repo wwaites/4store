@@ -800,10 +800,12 @@ int fs_resolve(fs_backend *be, fs_segment segment, fs_rid_vector *v,
     double then = fs_time();
     int ret = 0;
 
+    fs_assert(fs_lockable_test(be->res, (LOCK_SH|LOCK_EX)));
+
     for (int i=0; i<v->length; i++) {
 	out[i].rid = v->data[i];
     }
-    ret = fs_rhash_get_multi(be->res, out, v->length);
+    ret = fs_rhash_get_multi_r(be->res, out, v->length);
 
     be->out_time[segment].resolve_count++;
     be->out_time[segment].resolve += fs_time() - then;

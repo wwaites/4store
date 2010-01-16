@@ -30,7 +30,7 @@
 int main(int argc, char *argv[])
 {
 	char *file = g_strdup_printf("/tmp/test-%d.rhash", getpid());
-	fs_rhash *rh = fs_rhash_open_filename(file, O_RDWR | O_CREAT | O_TRUNC);
+	fs_lockable_t *rh = fs_rhash_open_filename(file, O_RDWR | O_CREAT | O_TRUNC);
 	fs_resource res;
 	char *strings[] = { "foo", "bar", "qwertyuiopasdf",
 			    "http://example.org/foo/bar",
@@ -43,22 +43,25 @@ int main(int argc, char *argv[])
 	fs_rhash_get(rh, &res);
 	printf("GOT %llx -> %s\n", res.rid, res.lex);
 	double then = fs_time();
+        fs_lockable_lock(rh, LOCK_EX);
 	for (int i=0; i<ITS; i++) {
 		r1.rid = i * BIG_PRIME + 23;
 		r1.lex = strings[i % 5];
-		if (fs_rhash_put(rh, &r1)) {
+		if (fs_rhash_put_r(rh, &r1)) {
 			printf("error @ %d\n", i);
 
 			return 1;
 		}
 	}
+        fs_lockable_lock(rh, LOCK_UN);
 	double now = fs_time();
 	printf("wrote resources, %f res/s\n", (double)ITS/(now-then));
 	then = fs_time();
+        fs_lockable_lock(rh, LOCK_SH);
 	int errors = 0;
 	for (int i=0; i<ITS; i++) {
 		r1.rid = i * BIG_PRIME + 23;
-		if (fs_rhash_get(rh, &r1)) {
+		if (fs_rhash_get_r(rh, &r1)) {
 			printf("error @ %d\n", i);
 			errors++;
 		}
@@ -71,6 +74,7 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 	}
+        fs_lockable_lock(rh, LOCK_UN);
 	now = fs_time();
 	printf("read resources, %f res/s\n", (double)ITS/(now-then));
 	if (errors) {

@@ -80,8 +80,21 @@ static unsigned char *handle_insert_resource(fs_backend *be, fs_segment segment,
     length -= offset;
   }
 
+  /* handle_insert_resource can be called after starting an import, thus
+   * with a LOCK_EX or on its own which means we have to do it here */
+  int res_lock = 0;
+  if (fs_lockable_test(be->res, LOCK_UN)) {
+      res_lock = 1;
+      if (fs_lockable_lock(be->res, LOCK_EX))
+          return fsp_error_new(segment, "could not lock resources");
+  }
+
   fs_res_import(be, segment, count, resources);
   free(resources);
+
+  if (res_lock)
+      if (fs_lockable_lock(be->res, LOCK_UN))
+          return fsp_error_new(segment, "could not unlock resources");
 
   return NULL; /* no reply - semi-async */
 }
@@ -100,7 +113,20 @@ static unsigned char * handle_commit_resource (fs_backend *be, fs_segment segmen
     return fsp_error_new(segment, "extraneous content");
   }
 
+  /* handle_insert_resource can be called after starting an import, thus
+   * with a LOCK_EX or on its own which means we have to do it here */
+  int res_lock = 0;
+  if (fs_lockable_test(be->res, LOCK_UN)) {
+      res_lock = 1;
+      if (fs_lockable_lock(be->res, LOCK_EX))
+          return fsp_error_new(segment, "could not lock resources");
+  }
+
   fs_res_import_commit(be, segment, 1);
+
+  if (res_lock)
+      if (fs_lockable_lock(be->res, LOCK_UN))
+          return fsp_error_new(segment, "could not unlock resources");
 
   return message_new(FS_DONE_OK, segment, 0);
 }
@@ -317,6 +343,10 @@ static unsigned char * handle_start_import (fs_backend *be, fs_segment segment,
 
   if (fs_lockable_lock(be->models, LOCK_EX))
       return fsp_error_new(segment, "could not lock models");
+  if (fs_lockable_lock(be->res, LOCK_EX)) {
+      fs_lockable_lock(be->models, LOCK_UN);
+      return fsp_error_new(segment, "could not lock resources");
+  }
 
   fs_start_import(be, segment);
 
@@ -339,6 +369,10 @@ static unsigned char * handle_stop_import (fs_backend *be, fs_segment segment,
 
   int ret = fs_stop_import(be, segment);
 
+  if (fs_lockable_lock(be->res, LOCK_UN)) {
+      fs_lockable_lock(be->models, LOCK_UN);
+      return fsp_error_new(segment, "could not unlock resources");
+  }
   if (fs_lockable_lock(be->models, LOCK_UN))
       return fsp_error_new(segment, "could not unlock models");
 
@@ -890,7 +924,17 @@ static unsigned char * handle_resolve_attr (fs_backend *be, fs_segment segment,
   v.size = v.length = count; 
   v.data = (fs_rid *) content;
 
+  int res_lock = 0;
+  if (!fs_lockable_test(be->res, (LOCK_SH|LOCK_EX))) {
+      res_lock = 1;
+      if (fs_lockable_lock(be->res, LOCK_SH))
+          return fsp_error_new(segment, "could not lock resources");
+  }
+
   fs_resolve(be, segment, &v, resources);
+
+  if (res_lock && fs_lockable_lock(be->res, LOCK_UN))
+      return fsp_error_new(segment, "could not unlock resources");
 
   unsigned int k, serial_length = 0;
   for (k = 0; k < count; ++k) {
