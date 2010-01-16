@@ -1,8 +1,9 @@
-#include <sys/file.h>
-#include <sys/stat.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
 #include <assert.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #include "lockable.h"
 #include "common/error.h"
 
@@ -43,6 +44,9 @@ static int fs_lockable_sync(fs_lockable_t *hf)
 int fs_lockable_lock(fs_lockable_t *hf, int operation)
 {
     struct stat stat;
+
+    /* this should not happen */
+    fs_assert(hf);
 
     /* It is an error to try to upgrade / downgrade locks */
     if ( (operation & LOCK_EX && hf->locktype & LOCK_SH) ||

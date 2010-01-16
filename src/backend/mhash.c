@@ -169,7 +169,7 @@ static int fs_mhash_write_header(fs_lockable_t *hf)
     struct mhash_header header;
     fs_mhash *mh = (fs_mhash *)hf;
 
-    assert(mh);
+    fs_assert(mh);
 
     header.id = FS_MHASH_ID;
     header.size = mh->mh_size;
@@ -188,6 +188,9 @@ static int fs_mhash_write_header(fs_lockable_t *hf)
 int fs_mhash_close(fs_lockable_t *hf)
 {
     fs_mhash *mh = (fs_mhash *)hf;
+
+    fs_assert(mh);
+
     close(mh->mh_fd);
     g_free(mh->mh_filename);
     free(mh);
@@ -201,6 +204,9 @@ int fs_mhash_put_r(fs_lockable_t *hf, const fs_rid rid, fs_index_node val)
     int entry = FS_MHASH_ENTRY(mh, rid);
     fs_mhash_entry e;
     int candidate = -1;
+
+    fs_assert(fs_lockable_test(hf, LOCK_EX));
+
     for (int i=0; 1; i++) {
         e.rid = 0;
         e.val = 0;
@@ -317,6 +323,10 @@ int fs_mhash_get_r(fs_lockable_t *hf, const fs_rid rid, fs_index_node *val)
     fs_mhash *mh = (fs_mhash *)hf;
     int entry = FS_MHASH_ENTRY(mh, rid);
     fs_mhash_entry e;
+
+    fs_assert(hf);
+    fs_assert(fs_lockable_test(hf, (LOCK_SH|LOCK_EX)));
+
     memset(&e, 0, sizeof(e));
 
     for (int i=0; i<mh->mh_search_dist; i++) {
@@ -353,14 +363,11 @@ int fs_mhash_get(fs_lockable_t *hf, const fs_rid rid, fs_index_node *val)
 fs_rid_vector *fs_mhash_get_keys_r(fs_lockable_t *hf)
 {
     fs_mhash *mh = (fs_mhash *)hf;
-    fs_rid_vector *v = fs_rid_vector_new(0);
+    fs_rid_vector *v;
     fs_mhash_entry e;
 
-    if (!mh) {
-        fs_error(LOG_CRIT, "tried to get keys from NULL mhash");
-
-        return NULL;
-    }
+    fs_assert(mh);
+    fs_assert(fs_lockable_test(hf, (LOCK_SH|LOCK_EX)));
 
     v = fs_rid_vector_new(0);
     if (!v)
@@ -393,15 +400,12 @@ fs_rid_vector *fs_mhash_get_keys(fs_lockable_t *hf)
 void fs_mhash_check_chain_r(fs_lockable_t *hf, fs_tbchain *tbc, FILE *out, int verbosity)
 {
     fs_mhash *mh = (fs_mhash *)hf;
-
-    if (!mh) {
-        fs_error(LOG_CRIT, "tried to print NULL mhash");
-
-        return;
-    }
     fs_mhash_entry e;
     int entry = 0;
     int count = 0;
+
+    fs_assert(hf);
+    fs_assert(fs_lockable_test(hf, (LOCK_SH|LOCK_EX)));
 
     lseek(mh->mh_fd, sizeof(struct mhash_header), SEEK_SET);
     while (read(mh->mh_fd, &e, sizeof(e)) == sizeof(e)) {
@@ -438,15 +442,14 @@ void fs_mhash_check_chain(fs_lockable_t *hf, fs_tbchain *tbc, FILE *out, int ver
 void fs_mhash_print_r(fs_lockable_t *hf, FILE *out, int verbosity)
 {
     fs_mhash *mh = (fs_mhash *)hf;
-    if (!mh) {
-        fs_error(LOG_CRIT, "tried to print NULL mhash");
-        return;
-    }
     fs_mhash_entry e;
     fs_rid_vector *models = fs_rid_vector_new(0);
     fs_rid last_model = FS_RID_NULL;
     int entry = 0;
     int count = 0;
+
+    fs_assert(hf);
+    fs_assert(fs_lockable_test(hf, (LOCK_SH|LOCK_EX)));
 
     fprintf(out, "mhash %s\n", mh->mh_filename);
     fprintf(out, "  count: %d\n", mh->mh_count);

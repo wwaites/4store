@@ -246,11 +246,7 @@ int fs_quad_import_commit(fs_backend *be, int seg, int flags, int account)
 	return 3;
     }
 
-    if (!fs_lockable_test(be->models, LOCK_EX)) {
-        fs_error(LOG_ERR, "fs_quad_import_commit called without holding LOCK_EX: %01x",
-                 be->models->locktype);
-        return 4;
-    }
+    fs_assert(fs_lockable_test(be->models, LOCK_EX));
 
     double then = fs_time();
 
@@ -445,11 +441,7 @@ int fs_delete_models(fs_backend *be, int seg, fs_rid_vector *mvec)
     double then = fs_time();
     int errs = 0;
 
-    if (!fs_lockable_test(be->models, LOCK_EX)) {
-        fs_error(LOG_ERR, "fs_delete_models called without holding LOCK_EX: %01x",
-                 be->models->locktype);
-        return -1;
-    }
+    fs_assert(fs_lockable_test(be->models, LOCK_EX));
 
     fs_rid_vector *todo = fs_rid_vector_new(0);
     for (int i=0; i<mvec->length; i++) {
