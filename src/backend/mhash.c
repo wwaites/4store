@@ -272,7 +272,6 @@ int fs_mhash_put(fs_lockable_t *hf, const fs_rid rid, fs_index_node val)
     if (fs_lockable_lock(hf, LOCK_EX))
         return -1;
     ret = fs_mhash_put_r(hf, rid, val);
-    fs_lockable_sync(hf);
     if (fs_lockable_lock(hf, LOCK_UN))
         return -1;
     return ret;

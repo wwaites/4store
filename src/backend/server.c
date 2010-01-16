@@ -231,11 +231,21 @@ static unsigned char * handle_delete_models (fs_backend *be, fs_segment segment,
   models.size = models.length  = length / sizeof(fs_rid);
   models.data = (fs_rid *) content;
 
-  if (fs_lockable_lock(be->models, LOCK_EX))
-    return fsp_error_new(segment, "could not lock models");
+  /* handle_delete_models can be called after starting an import, thus
+   * with a LOCK_EX or on its own which means we have to do it here */
+  int model_lock = 0;
+  if (fs_lockable_test(be->models, LOCK_UN)) {
+      model_lock = 1;
+      if (fs_lockable_lock(be->models, LOCK_EX))
+          return fsp_error_new(segment, "could not lock models");
+  }
+
   fs_delete_models(be, segment, &models);
-  fs_lockable_sync(be->models);
-  fs_lockable_lock(be->models, LOCK_UN);
+
+  if (model_lock) {
+      if(fs_lockable_lock(be->models, LOCK_UN))
+         return fsp_error_new(segment, "could not unlock models");
+  }
 
   return message_new(FS_DONE_OK, segment, 0);
 }
@@ -254,10 +264,16 @@ static unsigned char * handle_new_models (fs_backend *be, fs_segment segment,
     return fsp_error_new(segment, "missing model RIDs");
   }
 
-  if (fs_lockable_lock(be->models, LOCK_EX))
-    return fsp_error_new(segment, "couldn't get lock on models");
-
   fs_rid *models = (fs_rid *) content;
+
+  /* handle_new_models can be called after starting an import, thus
+   * with a LOCK_EX or on its own which means we have to do it here */
+  int model_lock = 0;
+  if (fs_lockable_test(be->models, LOCK_UN)) {
+      model_lock = 1;
+      if (fs_lockable_lock(be->models, LOCK_EX))
+          return fsp_error_new(segment, "could not lock models");
+  }
 
   int invalid_count = 0;
   for (int k= 0; k < (length / sizeof(fs_rid)); ++k) {
@@ -267,13 +283,11 @@ static unsigned char * handle_new_models (fs_backend *be, fs_segment segment,
       invalid_count++;
     }
   }
-  
-  if (fs_lockable_sync(be->models)) {
-    fs_lockable_lock(be->models, LOCK_UN);
-    return fsp_error_new(segment, "couldn't sync models");
+ 
+  if (model_lock) {
+      if (fs_lockable_lock(be->models, LOCK_UN))
+          return fsp_error_new(segment, "error releasing model lock");
   }
-  if (fs_lockable_lock(be->models, LOCK_UN))
-    return fsp_error_new(segment, "error releasing model lock");
 
   if (invalid_count > 0) {
     return fsp_error_new(segment, "one or more model RIDs is not a URI");
@@ -301,6 +315,9 @@ static unsigned char * handle_start_import (fs_backend *be, fs_segment segment,
     return fsp_error_new(segment, "low disk space");
   }
 
+  if (fs_lockable_lock(be->models, LOCK_EX))
+      return fsp_error_new(segment, "could not lock models");
+
   fs_start_import(be, segment);
 
   return message_new(FS_DONE_OK, segment, 0);
@@ -321,6 +338,9 @@ static unsigned char * handle_stop_import (fs_backend *be, fs_segment segment,
   }
 
   int ret = fs_stop_import(be, segment);
+
+  if (fs_lockable_lock(be->models, LOCK_UN))
+      return fsp_error_new(segment, "could not unlock models");
 
   if (ret) {
     return fsp_error_new(segment, "insert failed");

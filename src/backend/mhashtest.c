@@ -43,7 +43,6 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 	}
-        fs_lockable_sync(rh);
         fs_lockable_lock(rh, LOCK_UN);
 	double now = fs_time();
         
