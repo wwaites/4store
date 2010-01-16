@@ -250,7 +250,7 @@ int fs_quad_import_commit(fs_backend *be, int seg, int flags, int account)
 
     TIME(NULL);
 
-    if (fs_hashfile_lock(be->models, LOCK_EX))
+    if (fs_lockable_lock(be->models, LOCK_EX))
         return 4;
 
     if (be->pended_import) {
@@ -374,8 +374,8 @@ int fs_quad_import_commit(fs_backend *be, int seg, int flags, int account)
     }
 
     /* tsk tsk check return values */
-    fs_hashfile_sync(be->models);
-    fs_hashfile_lock(be->models, LOCK_UN);
+    fs_lockable_sync(be->models);
+    fs_lockable_lock(be->models, LOCK_UN);
         
     TIME("list append");
 
@@ -446,7 +446,7 @@ int fs_delete_models(fs_backend *be, int seg, fs_rid_vector *mvec)
     double then = fs_time();
     int errs = 0;
 
-    if (fs_hashfile_lock(be->models, LOCK_EX))
+    if (fs_lockable_lock(be->models, LOCK_EX))
         return -1;
 
     fs_rid_vector *todo = fs_rid_vector_new(0);
@@ -535,8 +535,8 @@ int fs_delete_models(fs_backend *be, int seg, fs_rid_vector *mvec)
 
     fs_rid_vector_free(todo);
 
-    errs += fs_hashfile_sync(be->models);
-    errs += fs_hashfile_lock(be->models, LOCK_UN);
+    errs += fs_lockable_sync(be->models);
+    errs += fs_lockable_lock(be->models, LOCK_UN);
 
     double now = fs_time();
     be->in_time[seg].remove += now - then;

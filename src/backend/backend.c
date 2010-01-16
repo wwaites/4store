@@ -269,7 +269,7 @@ int fs_start_import(fs_backend *be, int seg)
         fs_error(LOG_ERR, "start import, no models");
         return -1;
     }
-    return fs_hashfile_lock(be->models, LOCK_EX);
+    return fs_lockable_lock(be->models, LOCK_EX);
 }
 
 void fs_backend_ptree_limited_open(fs_backend *be, int n)
@@ -393,8 +393,8 @@ int fs_stop_import(fs_backend *be, int seg)
 
     fs_rhash_flush(be->res);
     if (be->models) {
-	fs_hashfile_sync(be->models);
-        fs_hashfile_lock(be->models, LOCK_UN);
+	fs_lockable_sync(be->models);
+        fs_lockable_lock(be->models, LOCK_UN);
     }
 
     int ret = fs_commit(be, seg, 0);

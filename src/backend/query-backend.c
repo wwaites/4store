@@ -270,7 +270,7 @@ fs_rid_vector **fs_bind(fs_backend *be, fs_segment segment, unsigned int tobind,
     /* if the query looks like (m ?s/_ ?p/_ ?o/_) we can consult the model
      * index */
     if (mvl > 0 && svl == 0 && pvl == 0 && ovl == 0) {
-        if (fs_hashfile_lock(be->models, LOCK_SH)) {
+        if (fs_lockable_lock(be->models, LOCK_SH)) {
             free(ret);
             return NULL;
         }
@@ -316,7 +316,7 @@ fs_rid_vector **fs_bind(fs_backend *be, fs_segment segment, unsigned int tobind,
 	be->out_time[segment].bind_count++;
 	be->out_time[segment].bind += fs_time() - then;
 
-        if (fs_hashfile_lock(be->models, LOCK_UN)) {
+        if (fs_lockable_lock(be->models, LOCK_UN)) {
             free(ret);
             return NULL;
         }

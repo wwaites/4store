@@ -1,18 +1,18 @@
-#ifndef HASHFILE_H
-#define HASHFILE_H
+#ifndef LOCKABLE_H
+#define LOCKABLE_H
 
-typedef struct _fs_hashfile_t {
+typedef struct _fs_lockable_t {
     int fd;
     int flags;
     char *filename;
     struct timespec mtime;
-    int (*read_metadata)(struct _fs_hashfile_t *hf);
-    int (*write_metadata)(struct _fs_hashfile_t *hf);
-} fs_hashfile_t;
+    int (*read_metadata)(struct _fs_lockable_t *hf);
+    int (*write_metadata)(struct _fs_lockable_t *hf);
+} fs_lockable_t;
 
-int fs_hashfile_init(fs_hashfile_t *);
-int fs_hashfile_lock(fs_hashfile_t *, int operation);
-int fs_hashfile_sync(fs_hashfile_t *);
+int fs_lockable_init(fs_lockable_t *);
+int fs_lockable_lock(fs_lockable_t *, int operation);
+int fs_lockable_sync(fs_lockable_t *);
 
 /*
  * Darwin doesn't have a real implementation of fsync(2). Instead, recent
@@ -29,4 +29,4 @@ int fs_hashfile_sync(fs_hashfile_t *);
 #define fs_fsync(fd) fsync(fd)
 #endif
 
-#endif /* HASHFILE_H */
+#endif /* LOCKABLE_H */

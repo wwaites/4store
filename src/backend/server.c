@@ -231,11 +231,11 @@ static unsigned char * handle_delete_models (fs_backend *be, fs_segment segment,
   models.size = models.length  = length / sizeof(fs_rid);
   models.data = (fs_rid *) content;
 
-  if (fs_hashfile_lock(be->models, LOCK_EX))
+  if (fs_lockable_lock(be->models, LOCK_EX))
     return fsp_error_new(segment, "could not lock models");
   fs_delete_models(be, segment, &models);
-  fs_hashfile_sync(be->models);
-  fs_hashfile_lock(be->models, LOCK_UN);
+  fs_lockable_sync(be->models);
+  fs_lockable_lock(be->models, LOCK_UN);
 
   return message_new(FS_DONE_OK, segment, 0);
 }
@@ -254,7 +254,7 @@ static unsigned char * handle_new_models (fs_backend *be, fs_segment segment,
     return fsp_error_new(segment, "missing model RIDs");
   }
 
-  if (fs_hashfile_lock(be->models, LOCK_EX))
+  if (fs_lockable_lock(be->models, LOCK_EX))
     return fsp_error_new(segment, "couldn't get lock on models");
 
   fs_rid *models = (fs_rid *) content;
@@ -268,11 +268,11 @@ static unsigned char * handle_new_models (fs_backend *be, fs_segment segment,
     }
   }
   
-  if (fs_hashfile_sync(be->models)) {
-    fs_hashfile_lock(be->models, LOCK_UN);
+  if (fs_lockable_sync(be->models)) {
+    fs_lockable_lock(be->models, LOCK_UN);
     return fsp_error_new(segment, "couldn't sync models");
   }
-  if (fs_hashfile_lock(be->models, LOCK_UN))
+  if (fs_lockable_lock(be->models, LOCK_UN))
     return fsp_error_new(segment, "error releasing model lock");
 
   if (invalid_count > 0) {

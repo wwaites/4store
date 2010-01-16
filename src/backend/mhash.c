@@ -55,7 +55,7 @@ struct mhash_header {
 } FS_PACKED;
  
 typedef struct _fs_mhash {
-    fs_hashfile_t hf;
+    fs_lockable_t hf;
     int32_t mh_size;
     int32_t mh_count;
     int32_t mh_search_dist;
@@ -72,20 +72,20 @@ typedef struct _fs_mhash_entry {
 } FS_PACKED fs_mhash_entry;
 
 static int double_size(fs_mhash *mh);
-static int fs_mhash_write_header(fs_hashfile_t *hf);
-static int fs_mhash_read_header(fs_hashfile_t *hf);
+static int fs_mhash_write_header(fs_lockable_t *hf);
+static int fs_mhash_read_header(fs_lockable_t *hf);
 
-fs_hashfile_t *fs_mhash_open(fs_backend *be, const char *label, int flags)
+fs_lockable_t *fs_mhash_open(fs_backend *be, const char *label, int flags)
 {
     char *filename = g_strdup_printf(FS_MHASH, fs_backend_get_kb(be),
                                      fs_backend_get_segment(be), label);
-    fs_hashfile_t *hf = fs_mhash_open_filename(filename, flags);
+    fs_lockable_t *hf = fs_mhash_open_filename(filename, flags);
     g_free(filename);
 
     return hf;
 }
 
-fs_hashfile_t *fs_mhash_open_filename(const char *filename, int flags)
+fs_lockable_t *fs_mhash_open_filename(const char *filename, int flags)
 {
     struct mhash_header header;
     fs_mhash *mh;
@@ -127,17 +127,17 @@ fs_hashfile_t *fs_mhash_open_filename(const char *filename, int flags)
     mh->mh_read_metadata = fs_mhash_read_header;
     mh->mh_write_metadata = fs_mhash_write_header;
 
-    if (fs_hashfile_init((fs_hashfile_t *)mh)) {
+    if (fs_lockable_init((fs_lockable_t *)mh)) {
         g_free(mh->mh_filename);
         free(mh);
         return NULL;
     }
 
-    return (fs_hashfile_t *)mh;
+    return (fs_lockable_t *)mh;
 }
 
 /* read_metadata method for hashfile */
-static int fs_mhash_read_header(fs_hashfile_t *hf)
+static int fs_mhash_read_header(fs_lockable_t *hf)
 {
     struct mhash_header header;
     fs_mhash *mh = (fs_mhash *)hf;
@@ -164,7 +164,7 @@ static int fs_mhash_read_header(fs_hashfile_t *hf)
 }
 
 /* write_metadata method for hashfile */
-static int fs_mhash_write_header(fs_hashfile_t *hf)
+static int fs_mhash_write_header(fs_lockable_t *hf)
 {
     struct mhash_header header;
     fs_mhash *mh = (fs_mhash *)hf;
@@ -185,7 +185,7 @@ static int fs_mhash_write_header(fs_hashfile_t *hf)
     return 0;
 }
 
-int fs_mhash_close(fs_hashfile_t *hf)
+int fs_mhash_close(fs_lockable_t *hf)
 {
     fs_mhash *mh = (fs_mhash *)hf;
     close(mh->mh_fd);
@@ -195,7 +195,7 @@ int fs_mhash_close(fs_hashfile_t *hf)
     return 0;
 }
 
-int fs_mhash_put_r(fs_hashfile_t *hf, const fs_rid rid, fs_index_node val)
+int fs_mhash_put_r(fs_lockable_t *hf, const fs_rid rid, fs_index_node val)
 {
     fs_mhash *mh = (fs_mhash *)hf;
     int entry = FS_MHASH_ENTRY(mh, rid);
@@ -266,14 +266,14 @@ int fs_mhash_put_r(fs_hashfile_t *hf, const fs_rid rid, fs_index_node val)
     return 0;
 }
 
-int fs_mhash_put(fs_hashfile_t *hf, const fs_rid rid, fs_index_node val)
+int fs_mhash_put(fs_lockable_t *hf, const fs_rid rid, fs_index_node val)
 {
     int ret;
-    if (fs_hashfile_lock(hf, LOCK_EX))
+    if (fs_lockable_lock(hf, LOCK_EX))
         return -1;
     ret = fs_mhash_put_r(hf, rid, val);
-    fs_hashfile_sync(hf);
-    if (fs_hashfile_lock(hf, LOCK_UN))
+    fs_lockable_sync(hf);
+    if (fs_lockable_lock(hf, LOCK_UN))
         return -1;
     return ret;
 }
@@ -313,7 +313,7 @@ static int double_size(fs_mhash *mh)
     return errs;
 }
 
-int fs_mhash_get_r(fs_hashfile_t *hf, const fs_rid rid, fs_index_node *val)
+int fs_mhash_get_r(fs_lockable_t *hf, const fs_rid rid, fs_index_node *val)
 {
     fs_mhash *mh = (fs_mhash *)hf;
     int entry = FS_MHASH_ENTRY(mh, rid);
@@ -340,18 +340,18 @@ int fs_mhash_get_r(fs_hashfile_t *hf, const fs_rid rid, fs_index_node *val)
     return 0;
 }
 
-int fs_mhash_get(fs_hashfile_t *hf, const fs_rid rid, fs_index_node *val)
+int fs_mhash_get(fs_lockable_t *hf, const fs_rid rid, fs_index_node *val)
 {
     int ret;
-    if (fs_hashfile_lock(hf, LOCK_SH))
+    if (fs_lockable_lock(hf, LOCK_SH))
         return -1;
     ret = fs_mhash_get_r(hf, rid, val);
-    if (fs_hashfile_lock(hf, LOCK_UN))
+    if (fs_lockable_lock(hf, LOCK_UN))
         return -1;
     return ret;
 }
 
-fs_rid_vector *fs_mhash_get_keys_r(fs_hashfile_t *hf)
+fs_rid_vector *fs_mhash_get_keys_r(fs_lockable_t *hf)
 {
     fs_mhash *mh = (fs_mhash *)hf;
     fs_rid_vector *v = fs_rid_vector_new(0);
@@ -377,13 +377,13 @@ fs_rid_vector *fs_mhash_get_keys_r(fs_hashfile_t *hf)
     return v;
 }
 
-fs_rid_vector *fs_mhash_get_keys(fs_hashfile_t *hf)
+fs_rid_vector *fs_mhash_get_keys(fs_lockable_t *hf)
 {
     fs_rid_vector *ret;
-    if (fs_hashfile_lock(hf, LOCK_SH))
+    if (fs_lockable_lock(hf, LOCK_SH))
         return NULL;
     ret = fs_mhash_get_keys_r(hf);
-    if (fs_hashfile_lock(hf, LOCK_UN)) {
+    if (fs_lockable_lock(hf, LOCK_UN)) {
         if (ret)
             fs_rid_vector_free(ret);
         return NULL;
@@ -391,7 +391,7 @@ fs_rid_vector *fs_mhash_get_keys(fs_hashfile_t *hf)
     return ret;
 }
 
-void fs_mhash_check_chain_r(fs_hashfile_t *hf, fs_tbchain *tbc, FILE *out, int verbosity)
+void fs_mhash_check_chain_r(fs_lockable_t *hf, fs_tbchain *tbc, FILE *out, int verbosity)
 {
     fs_mhash *mh = (fs_mhash *)hf;
 
@@ -428,15 +428,15 @@ void fs_mhash_check_chain_r(fs_hashfile_t *hf, fs_tbchain *tbc, FILE *out, int v
     }
 }
 
-void fs_mhash_check_chain(fs_hashfile_t *hf, fs_tbchain *tbc, FILE *out, int verbosity)
+void fs_mhash_check_chain(fs_lockable_t *hf, fs_tbchain *tbc, FILE *out, int verbosity)
 {
-    if (fs_hashfile_lock(hf, LOCK_SH))
+    if (fs_lockable_lock(hf, LOCK_SH))
         return;
     fs_mhash_check_chain_r(hf, tbc, out, verbosity);
-    fs_hashfile_lock(hf, LOCK_UN);
+    fs_lockable_lock(hf, LOCK_UN);
 }
 
-void fs_mhash_print_r(fs_hashfile_t *hf, FILE *out, int verbosity)
+void fs_mhash_print_r(fs_lockable_t *hf, FILE *out, int verbosity)
 {
     fs_mhash *mh = (fs_mhash *)hf;
     if (!mh) {
@@ -485,15 +485,15 @@ void fs_mhash_print_r(fs_hashfile_t *hf, FILE *out, int verbosity)
     }
 }
 
-void fs_mhash_print(fs_hashfile_t *hf, FILE *out, int verbosity)
+void fs_mhash_print(fs_lockable_t *hf, FILE *out, int verbosity)
 {
-    if (fs_hashfile_lock(hf, LOCK_SH))
+    if (fs_lockable_lock(hf, LOCK_SH))
         return;
     fs_mhash_print_r(hf, out, verbosity);
-    fs_hashfile_lock(hf, LOCK_UN);
+    fs_lockable_lock(hf, LOCK_UN);
 }
 
-int fs_mhash_count(fs_hashfile_t *hf)
+int fs_mhash_count(fs_lockable_t *hf)
 {
     fs_mhash *mh = (fs_mhash *)hf;
     return mh->mh_count;

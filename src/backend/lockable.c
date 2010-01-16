@@ -2,12 +2,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <string.h>
-#include "hashfile.h"
+#include "lockable.h"
 #include "common/error.h"
 
 extern int errno;
 
-int fs_hashfile_lock(fs_hashfile_t *hf, int operation)
+int fs_lockable_lock(fs_lockable_t *hf, int operation)
 {
     struct stat stat;
 
@@ -37,7 +37,7 @@ int fs_hashfile_lock(fs_hashfile_t *hf, int operation)
  * or metadata as appropriate. Handles locking. Returns
  * 0 on success, -1 on error. T
  */
-int fs_hashfile_init(fs_hashfile_t *hf)
+int fs_lockable_init(fs_lockable_t *hf)
 {
     struct stat stat;
     int file_length;
@@ -130,7 +130,7 @@ int fs_hashfile_init(fs_hashfile_t *hf)
     return 0;
 }
 
-int fs_hashfile_sync(fs_hashfile_t *hf)
+int fs_lockable_sync(fs_lockable_t *hf)
 {
     struct stat stat;
     /* write out any necessary metadata */
