@@ -43,11 +43,10 @@
 
 enum sort_state { unsorted, chunk_sorted, sorted };
 
-struct _fs_list {
-    int fd;
+typedef struct _fs_list {
+    fs_lockable_t hf;
     size_t width;
     off_t offset;
-    char *filename;
     int buffer_pos;
     void *buffer;
     enum sort_state sort;
@@ -58,18 +57,26 @@ struct _fs_list {
     off_t *chunk_end;
     void *map;
     void *last;
-};
+} fs_list;
+#define l_fd hf.fd
+#define l_filename hf.filename
+#define l_flags hf.flags
+#define l_read_metadata hf.read_metadata
+#define l_write_metadata hf.write_metadata
 
-fs_list *fs_list_open(fs_backend *be, const char *label, size_t width, int flags)
+static int fs_list_read_metadata(fs_lockable_t *);
+static int fs_list_flush(fs_lockable_t *);
+
+fs_lockable_t *fs_list_open(fs_backend *be, const char *label, size_t width, int flags)
 {
     char *filename = g_strdup_printf(FS_LIST, fs_backend_get_kb(be), fs_backend_get_segment(be), label);
-    fs_list *l = fs_list_open_filename(filename, width, flags);
+    fs_lockable_t *l = fs_list_open_filename(filename, width, flags);
     g_free(filename);
 
     return l;
 }
 
-fs_list *fs_list_open_filename(const char *filename, size_t width, int flags)
+fs_lockable_t *fs_list_open_filename(const char *filename, size_t width, int flags)
 {
     if (CHUNK_SIZE % width != 0) {
         fs_error(LOG_CRIT, "width of %s (%lld) does no go into %lld", filename,
@@ -78,89 +85,96 @@ fs_list *fs_list_open_filename(const char *filename, size_t width, int flags)
         return NULL;
     }
     fs_list *l = calloc(1, sizeof(fs_list));
-    l->filename = g_strdup(filename);
-    l->sort = unsorted;
-    l->fd = open(filename, FS_O_NOATIME | flags, FS_FILE_MODE);
-    if (l->fd == -1) {
-        fs_error(LOG_ERR, "failed to open list file '%s': %s", l->filename, strerror(errno));
-
-        return NULL;
-    }
-    if ((flags & (O_WRONLY | O_RDWR)) && flock(l->fd, LOCK_EX) == -1) {
-        fs_error(LOG_ERR, "failed to open list: %s, cannot get lock: %s", filename, strerror(errno));
-
-        return NULL;
-    }
-    off_t end = lseek(l->fd, 0, SEEK_END);
-    if (end == -1) {
-        fs_error(LOG_CRIT, "failed to open list: %s, cannot seek to end", filename);
-
-        return NULL;
-    }
-    if (end % width != 0) {
-        fs_error(LOG_CRIT, "failed to open list: %s, length not multiple of data size", filename);
-
-        return NULL;
-    }
-    l->offset = end / width;
-    l->width = width;
+    fs_lockable_t *hf = (fs_lockable_t *)l;
+    l->l_filename = g_strdup(filename);
+    l->l_fd = open(filename, FS_O_NOATIME | flags, FS_FILE_MODE);
     l->buffer_pos = 0;
     l->buffer = malloc(LIST_BUFFER_SIZE * width);
-    if (l->fd == -1) {
-        fs_error(LOG_CRIT, "failed to open list %s: %s", filename,
-                strerror(errno));
-
+    if (l->l_fd == -1) {
+        fs_error(LOG_ERR, "failed to open list file '%s': %s", l->l_filename, strerror(errno));
+        g_free(l->l_filename);
+        free(l->buffer);
+        free(l);
         return NULL;
     }
 
-    return l;
+    l->sort = unsorted;
+    l->width = width;
+
+    l->l_read_metadata = fs_list_read_metadata;
+    l->l_write_metadata = fs_list_flush;
+
+    if (fs_lockable_init(hf)) {
+        g_free(l->l_filename);
+        free(l->buffer);
+        free(l);
+        return NULL;
+    }
+   
+    return hf;
+}
+ 
+static int fs_list_read_metadata(fs_lockable_t *hf)
+{
+    fs_list *l = (fs_list *)hf;
+    off_t end = lseek(l->l_fd, 0, SEEK_END);
+    if (end == -1) {
+        fs_error(LOG_CRIT, "failed to open list: %s, cannot seek to end", l->l_filename);
+        return -1;
+    }
+    if (end % l->width != 0) {
+        fs_error(LOG_CRIT, "failed to open list: %s, length not multiple of data size", l->l_filename);
+        return -1;
+    }
+    l->offset = end / l->width;
+
+    return 0;
 }
 
-int fs_list_flush(fs_list *l)
+static int fs_list_flush(fs_lockable_t *hf)
 {
-    if (!l) {
-        fs_error(LOG_WARNING, "tried to flush NULL list");
-
-        return 1;
-    }
-    if (!l->filename) {
-        fs_error(LOG_WARNING, "tried to flush list with NULL name");
-
-        return 1;
-    }
+    fs_list *l = (fs_list *)hf;
     
-    off_t end = lseek(l->fd, l->offset * l->width, SEEK_SET);
+    off_t end = lseek(l->l_fd, l->offset * l->width, SEEK_SET);
     if (end == -1) {
-        fs_error(LOG_ERR, "failed to seek to end of list %s: %s", l->filename,
+        fs_error(LOG_ERR, "failed to seek to end of list %s: %s", l->l_filename,
                 strerror(errno));
-
         return -1;
     }
     if (l->buffer_pos > 0) {
-        int ret = write(l->fd, l->buffer, l->width * l->buffer_pos);
+        int ret = write(l->l_fd, l->buffer, l->width * l->buffer_pos);
         if (ret != l->width * l->buffer_pos) {
-            fs_error(LOG_ERR, "failed to write to list %s: %s", l->filename,
+            fs_error(LOG_ERR, "failed to write to list %s: %s", l->l_filename,
                     strerror(errno));
-
             return -1;
         }
     }
 
     l->buffer_pos = 0;
-    l->offset = lseek(l->fd, 0, SEEK_END) / l->width;
+    l->offset = lseek(l->l_fd, 0, SEEK_END) / l->width;
 
     return 0;
 }
 
-int32_t fs_list_add(fs_list *l, const void *data)
+int32_t fs_list_add(fs_lockable_t *hf, const void *data)
 {
-    if (!l) {
-        fs_error(LOG_CRIT, "tried to write to NULL list");
+    int32_t ret;
+    if (fs_lockable_lock(hf, LOCK_EX))
         return -1;
-    }
+    ret = fs_list_add_r(hf, data);
+    if (fs_lockable_lock(hf, LOCK_UN))
+        return -1;
+    return ret;
+}
+
+int32_t fs_list_add_r(fs_lockable_t *hf, const void *data)
+{
+    fs_list *l = (fs_list *)hf;
+
+    fs_assert(fs_lockable_test(hf, LOCK_EX));
 
     if (l->buffer_pos == LIST_BUFFER_SIZE) {
-        int ret = fs_list_flush(l);
+        int ret = fs_list_flush(hf);
         if (ret != 0) return ret;
     }
 
@@ -171,69 +185,77 @@ int32_t fs_list_add(fs_list *l, const void *data)
     return l->offset + l->buffer_pos - 1;
 }
 
-int fs_list_get(fs_list *l, int32_t pos, void *data)
+int fs_list_get(fs_lockable_t *hf, int32_t pos, void *data)
 {
-    if (!l) {
-        fs_error(LOG_CRIT, "tried to read from NULL list");
-        return 1;
-    }
+    int ret;
+    if (fs_lockable_lock(hf, LOCK_SH))
+        return -1;
+    ret = fs_list_get_r(hf, pos, data);
+    if (fs_lockable_lock(hf, LOCK_UN))
+        return -1;
+    return ret;
+}
+
+int fs_list_get_r(fs_lockable_t *hf, int32_t pos, void *data)
+{
+    fs_list *l = (fs_list *)hf;
+
+    fs_assert(fs_lockable_test(hf, (LOCK_SH|LOCK_EX)));
 
     if (pos >= l->offset) {
         /* fetch from buffer */
         if (pos >= (long int)l->offset + (long int)l->buffer_pos) {
             fs_error(LOG_CRIT, "tried to read past end of list %s, "
-                     "postition %d/%d", l->filename, pos,
+                     "postition %d/%d", l->l_filename, pos,
                      (int)l->offset + l->buffer_pos);
 
             return 1;
         }
         memcpy(data, l->buffer + (pos - l->offset) * l->width, l->width);
-
         return 0;
     }
 
-    if (lseek(l->fd, pos * l->width, SEEK_SET) == -1) {
-        fs_error(LOG_ERR, "failed to seek to position %zd in %s", pos * l->width, l->filename);
-
+    if (lseek(l->l_fd, pos * l->width, SEEK_SET) == -1) {
+        fs_error(LOG_ERR, "failed to seek to position %zd in %s", pos * l->width, l->l_filename);
         return 1;
     }
-    int ret = read(l->fd, data, l->width);
+    int ret = read(l->l_fd, data, l->width);
     if (ret != l->width) {
         if (ret == -1) {
-            fs_error(LOG_CRIT, "failed to read %zd bytes from list %s, position %d, %s", l->width, l->filename, pos, strerror(errno));
+            fs_error(LOG_CRIT, "failed to read %zd bytes from list %s, position %d, %s", l->width, l->l_filename, pos, strerror(errno));
         } else {
-            fs_error(LOG_CRIT, "failed to read %zd bytes from list %s, position %d/%ld, got %d bytes", l->width, l->filename, pos, (long int)l->offset, ret);
+            fs_error(LOG_CRIT, "failed to read %zd bytes from list %s, position %d/%ld, got %d bytes", l->width, l->l_filename, pos, (long int)l->offset, ret);
         }
-
         return 1;
     }
 
     return 0;
 }
 
-int fs_list_length(fs_list *l)
+int fs_list_length_r(fs_lockable_t *hf)
 {
+    fs_list *l = (fs_list *)hf;
+    fs_assert(fs_lockable_test(hf, (LOCK_SH|LOCK_EX)));
     return l->offset + l->buffer_pos;
 }
 
-void fs_list_rewind(fs_list *l)
+void fs_list_rewind_r(fs_lockable_t *hf)
 {
-    lseek(l->fd, 0, SEEK_SET);
+    fs_list *l = (fs_list *)hf;
+    fs_assert(fs_lockable_test(hf, (LOCK_SH|LOCK_EX)));
+    lseek(l->l_fd, 0, SEEK_SET);
 }
 
 /* return the next item from a sorted list, uniqs as well */
-int fs_list_next_sort_uniqed(fs_list *l, void *out)
+int fs_list_next_sort_uniqed_r(fs_lockable_t *hf, void *out)
 {
-    if (!l) {
-        fprintf(out, "NULL list\n");
-
-        return 0;
-    }
+    fs_list *l = (fs_list *)hf;
+    fs_assert(fs_lockable_test(hf, (LOCK_SH|LOCK_EX)));
 
     switch (l->sort) {
     case unsorted:
         fs_error(LOG_WARNING, "tried to call %s on unsorted list", __func__);
-        return fs_list_next_value(l, out);
+        return fs_list_next_value_r(hf, out);
 
     case sorted:
         /* could use fs_list_next_value(l, out) but it will cause duplicates */
@@ -267,7 +289,7 @@ int fs_list_next_sort_uniqed(fs_list *l, void *out)
         }
         l->last = calloc(1, l->width);
         l->map = mmap(NULL, l->offset * l->width, PROT_READ,
-                     MAP_FILE | MAP_SHARED, l->fd, 0);
+                     MAP_FILE | MAP_SHARED, l->l_fd, 0);
     }
 
 again:;
@@ -319,15 +341,15 @@ again:;
     }
 }
 
-int fs_list_next_value(fs_list *l, void *out)
+/* it does not make sense to have a locking version of this routine
+ * since "next" is undefined outside of the context of a lock */
+int fs_list_next_value_r(fs_lockable_t *hf, void *out)
 {
-    if (!l) {
-        fprintf(out, "NULL list\n");
+    fs_list *l = (fs_list *)hf;
 
-        return 0;
-    }
+    fs_assert(fs_lockable_test(hf, (LOCK_SH|LOCK_EX)));
 
-    int ret = read(l->fd, out, l->width);
+    int ret = read(l->l_fd, out, l->width);
     if (ret == -1) {
         fs_error(LOG_ERR, "error reading entry from list: %s\n", strerror(errno));
         return 0;
@@ -342,13 +364,19 @@ int fs_list_next_value(fs_list *l, void *out)
     return 1;
 }
 
-void fs_list_print(fs_list *l, FILE *out, int verbosity)
+void fs_list_print(fs_lockable_t *hf, FILE *out, int verbosity)
 {
-    if (!l) {
-        fprintf(out, "NULL list\n");
-
+    if (fs_lockable_lock(hf, LOCK_SH))
         return;
-    }
+    fs_list_print_r(hf, out, verbosity);
+    fs_lockable_lock(hf, LOCK_UN);
+}
+
+void fs_list_print_r(fs_lockable_t *hf, FILE *out, int verbosity)
+{
+    fs_list *l = (fs_list *)hf;
+
+    fs_assert(fs_lockable_test(hf, (LOCK_SH|LOCK_EX)));
 
     fprintf(out, "list of %ld entries\n", (long int)(l->offset + l->buffer_pos));
     if (l->buffer_pos) {
@@ -370,13 +398,13 @@ void fs_list_print(fs_list *l, FILE *out, int verbosity)
     }
     if (verbosity > 0) {
         char buffer[l->width];
-        lseek(l->fd, 0, SEEK_SET);
+        fs_list_rewind_r(hf);
         for (int i=0; i<l->offset; i++) {
             if (l->sort == chunk_sorted && i>0 && i % (CHUNK_SIZE/l->width) == 0) {
                 fprintf(out, "--- sort chunk boundary ----\n");
             }
             memset(buffer, 0, l->width);
-            int ret = read(l->fd, buffer, l->width);
+            int ret = read(l->l_fd, buffer, l->width);
             if (ret == -1) {
                 fs_error(LOG_ERR, "error reading entry %d from list: %s\n", i, strerror(errno));
             } else if (ret != l->width) {
@@ -394,10 +422,25 @@ void fs_list_print(fs_list *l, FILE *out, int verbosity)
     }
 }
 
-int fs_list_truncate(fs_list *l)
+int fs_list_truncate(fs_lockable_t *hf)
 {
-    if (ftruncate(l->fd, 0) == -1) {
-        fs_error(LOG_CRIT, "failed to truncate '%s': %s", l->filename, strerror(errno));
+    int ret;
+    if (fs_lockable_lock(hf, LOCK_EX))
+        return -1;
+    ret = fs_list_truncate_r(hf);
+    if (fs_lockable_lock(hf, LOCK_UN))
+        return -1;
+    return ret;
+}
+
+int fs_list_truncate_r(fs_lockable_t *hf)
+{
+    fs_list *l = (fs_list *)hf;
+
+    fs_assert(fs_lockable_test(hf, LOCK_EX));
+
+    if (ftruncate(l->l_fd, 0) == -1) {
+        fs_error(LOG_CRIT, "failed to truncate '%s': %s", l->l_filename, strerror(errno));
 
         return 1;
     }
@@ -411,10 +454,10 @@ static int fs_list_sort_chunk(fs_list *l, off_t start, off_t length, int (*comp)
 {
     /* map the file so we can access it efficiently */
     void *map = mmap(NULL, length * l->width, PROT_READ | PROT_WRITE,
-                     MAP_FILE | MAP_SHARED, l->fd, start * l->width);
+                     MAP_FILE | MAP_SHARED, l->l_fd, start * l->width);
     if (map == (void *)-1) {
         fs_error(LOG_ERR, "failed to map '%s', %lld+%lld for sort: %s",
-                 l->filename, (long long)start * l->width,
+                 l->l_filename, (long long)start * l->width,
                  (long long)length * l->width, strerror(errno));
 
         return 1;
@@ -427,10 +470,25 @@ static int fs_list_sort_chunk(fs_list *l, off_t start, off_t length, int (*comp)
     return 0;
 }
 
-int fs_list_sort(fs_list *l, int (*comp)(const void *, const void *))
+int fs_list_sort(fs_lockable_t *hf, int (*comp)(const void *, const void *))
 {
+    int ret;
+    if (fs_lockable_lock(hf, LOCK_EX))
+        return -1;
+    ret = fs_list_sort_r(hf, comp);
+    if (fs_lockable_lock(hf, LOCK_UN))
+        return -1;
+    return ret;
+}
+
+int fs_list_sort_r(fs_lockable_t *hf, int (*comp)(const void *, const void *))
+{
+    fs_list *l = (fs_list *)hf;
+
+    fs_assert(fs_lockable_test(hf, LOCK_EX));
+
     /* make sure it's flushed to disk */
-    fs_list_flush(l);
+    fs_list_flush(hf);
     l->sort_func = comp;
 
     if (fs_list_sort_chunk(l, 0, l->offset, comp)) {
@@ -441,10 +499,25 @@ int fs_list_sort(fs_list *l, int (*comp)(const void *, const void *))
     return 0;
 }
 
-int fs_list_sort_chunked(fs_list *l, int (*comp)(const void *, const void *))
+int fs_list_sort_chunked(fs_lockable_t *hf, int (*comp)(const void *, const void *))
 {
+    int ret;
+    if (fs_lockable_lock(hf, LOCK_EX))
+        return -1;
+    ret = fs_list_sort_chunked_r(hf, comp);
+    if (fs_lockable_lock(hf, LOCK_UN))
+        return -1;
+    return ret;
+}
+
+int fs_list_sort_chunked_r(fs_lockable_t *hf, int (*comp)(const void *, const void *))
+{
+    fs_list *l = (fs_list *)hf;
+
+    fs_assert(fs_lockable_test(hf, LOCK_EX));
+
     /* make sure it's flushed to disk */
-    fs_list_flush(l);
+    fs_list_flush(hf);
     l->sort_func = comp;
 
     for (int c=0; c < l->offset; c += CHUNK_SIZE/l->width) {
@@ -453,7 +526,6 @@ int fs_list_sort_chunked(fs_list *l, int (*comp)(const void *, const void *))
         int ret = fs_list_sort_chunk(l, c, length, comp);
         if (ret) {
             fs_error(LOG_ERR, "chunked sort failed at chunk %ld", c / (CHUNK_SIZE/l->width));
-
             return ret;
         }
     }
@@ -466,31 +538,19 @@ int fs_list_sort_chunked(fs_list *l, int (*comp)(const void *, const void *))
     return 0;
 }
 
-int fs_list_lock(fs_list *l, int action)
+int fs_list_unlink(fs_lockable_t *hf)
 {
-    return flock(l->fd, action);
+//    fs_assert(fs_lockable_test(hf, LOCK_EX));
+    return unlink(hf->filename);
 }
 
-int fs_list_unlink(fs_list *l)
+int fs_list_close(fs_lockable_t *hf)
 {
-    return unlink(l->filename);
-}
-
-int fs_list_close(fs_list *l)
-{
-    if (l->fd == -1) {
-        fs_error(LOG_WARNING, "tried to close already closed list");
-
-        return 1;
-    }
-    fs_list_flush(l);
-    int fd = l->fd;
-    l->fd = -1;
-    g_free(l->filename);
-    l->filename = NULL;
+    fs_list *l = (fs_list *)hf;
+    int fd = l->l_fd;
+    g_free(l->l_filename);
     free(l->buffer);
     free(l);
-    flock(fd, LOCK_UN);
 
     return close(fd);
 }

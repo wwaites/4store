@@ -305,14 +305,16 @@ static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 {
     fs_rid_set *rs = NULL;
 
-    if (fs_list_length(be->pending_delete) > 0) {
+    fs_lockable_lock(be->pending_delete, LOCK_EX);
+    if (fs_list_length_r(be->pending_delete) > 0) {
 	rs = fs_rid_set_new();
 	fs_rid val;
-	fs_list_rewind(be->pending_delete);
-	while (fs_list_next_value(be->pending_delete, &val)) {
+	fs_list_rewind_r(be->pending_delete);
+	while (fs_list_next_value_r(be->pending_delete, &val)) {
 	    fs_rid_set_add(rs, val);
 	}
     }
+    fs_lockable_lock(be->pending_delete, LOCK_UN);
 
     if (be->pended_import) {
 	/* push out pending data */
@@ -320,13 +322,14 @@ static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 	fs_rid quad[4];
 	fs_rid pred = FS_RID_NULL;
 	fs_ptree *current_tree = NULL;
+        fs_lockable_lock(be->predicates, LOCK_EX);
 	for (int i=0; i<FS_PENDED_LISTS; i++) {
-	    fs_list_flush(be->pended[i]);
+	    fs_lockable_lock(be->pended[i], LOCK_EX); /* XXX retval */
 
 	    /* process S ptrees */
-	    fs_list_rewind(be->pended[i]);
-	    fs_list_sort_chunked(be->pended[i], quad_sort_by_psmo);
-	    while (fs_list_next_sort_uniqed(be->pended[i], quad)) {
+	    fs_list_rewind_r(be->pended[i]);
+	    fs_list_sort_chunked_r(be->pended[i], quad_sort_by_psmo);
+	    while (fs_list_next_sort_uniqed_r(be->pended[i], quad)) {
 		if (quad[2] != pred) {
 		    pred = quad[2];
 		    current_tree = fs_backend_get_ptree(be, pred, 0);
@@ -335,7 +338,7 @@ static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 			int n = fs_backend_open_ptree(be, pred);
 			struct ptree_ref *r = fs_backend_ptree_ref(be, n);
 			current_tree = r->ptree_s;
-			fs_list_add(be->predicates, &pred);
+			fs_list_add_r(be->predicates, &pred);
 		    }
 		    if (!current_tree) {
 			fs_error(LOG_CRIT, "failed to create ptree for %016llx",
@@ -349,9 +352,9 @@ static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 	    /* process O ptrees */
 	    pred = FS_RID_NULL;
 	    current_tree = NULL;
-	    fs_list_rewind(be->pended[i]);
-	    fs_list_sort_chunked(be->pended[i], quad_sort_by_poms);
-	    while (fs_list_next_sort_uniqed(be->pended[i], quad)) {
+	    fs_list_rewind_r(be->pended[i]);
+	    fs_list_sort_chunked_r(be->pended[i], quad_sort_by_poms);
+	    while (fs_list_next_sort_uniqed_r(be->pended[i], quad)) {
 		if (quad[2] != pred) {
 		    pred = quad[2];
 		    current_tree = fs_backend_get_ptree(be, pred, 1);
@@ -366,9 +369,11 @@ static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 
 	    /* cleanup pended lists */
 	    fs_list_unlink(be->pended[i]);
+            fs_lockable_lock(be->pended[i], LOCK_UN);
 	    fs_list_close(be->pended[i]);
 	    be->pended[i] = NULL;
 	}
+        fs_lockable_lock(be->predicates, LOCK_UN);
 
 	be->pended_import = 0;
     }
@@ -417,15 +422,14 @@ int fs_backend_model_get_usage(fs_backend *be, int seg, fs_rid model, fs_index_n
     return fs_mhash_get_r(be->models, model, val);
 }
 
-/* must be called while holding write lock */
+/* must be called while holding write lock on models and predicates */
 int fs_backend_model_set_usage(fs_backend *be, int seg, fs_rid model, fs_index_node val)
 {
     int ret = 0;
 
     if (fs_backend_is_transaction_open(be)) {
 	if (val) {
-	    ret = fs_list_add(be->pending_insert, &model);
-	    fs_list_flush(be->pending_insert);
+	    ret = fs_list_add_r(be->pending_insert, &model);
 	} else {
 	    fs_error(LOG_CRIT, "tried to set model usage to false in transaction");
 	    ret = 1;
@@ -551,8 +555,10 @@ int fs_backend_open_files_intl(fs_backend *be, fs_segment seg, int flags, int fi
 
     if (!be->predicates) {
 	be->predicates = fs_list_open(be, "predicates", sizeof(fs_rid), flags);
+        if (fs_lockable_lock(be->predicates, LOCK_SH))
+            return 1;
 	fs_rid pred;
-	int length = fs_list_length(be->predicates);
+	int length = fs_list_length_r(be->predicates);
 	be->ptree_length = 0;
 	if (length < 16) {
 	    be->ptree_size = 16;
@@ -561,7 +567,6 @@ int fs_backend_open_files_intl(fs_backend *be, fs_segment seg, int flags, int fi
 	}
 	be->ptree_open_flags = flags;
 	be->ptrees_priv = calloc(be->ptree_size, sizeof(struct ptree_ref));
-	fs_list_rewind(be->predicates);
 	be->pairs = fs_ptable_open(be, "pairs", flags | O_RDWR);
 	if (!be->pairs) {
 	    fs_error(LOG_CRIT, "failed to open ptable file");
@@ -570,9 +575,12 @@ int fs_backend_open_files_intl(fs_backend *be, fs_segment seg, int flags, int fi
 	}
 	be->rid_id_map = g_hash_table_new_full(rid_hash, rid_equal, g_free,
 					       NULL);
-	while (fs_list_next_value(be->predicates, &pred)) {
+        fs_list_rewind_r(be->predicates);
+	while (fs_list_next_value_r(be->predicates, &pred)) {
 	    fs_backend_open_ptree(be, pred);
 	}
+        if (fs_lockable_lock(be->predicates, LOCK_UN))
+            return 1;
     }
 
     if (files & FS_OPEN_DEL) {

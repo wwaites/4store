@@ -34,7 +34,7 @@ int main(int argc, char *argv[])
     }
 
     for (int i=1; i<argc; i++) {
-        fs_list *list = fs_list_open_filename(argv[i], 4 * sizeof(fs_rid), 0);
+        fs_lockable_t *list = fs_list_open_filename(argv[i], 4 * sizeof(fs_rid), 0);
         if (!list) {
             printf("couldn't open list\n");
 

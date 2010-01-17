@@ -52,7 +52,7 @@ int main(int argc, char *argv[])
             i++;
             continue;
         }
-        fs_mhash *mh = fs_mhash_open_filename(argv[i], 0);
+        fs_lockable_t *mh = fs_mhash_open_filename(argv[i], 0);
         if (!mh) {
             printf("couldn't open hash\n");
 

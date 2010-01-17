@@ -44,7 +44,7 @@ int main(int argc, char *argv[])
         } else if (!strcmp(argv[i], "--header")) {
             verbosity = 0;
         } else {
-            fs_rhash *rh = fs_rhash_open_filename(argv[i], 0);
+            fs_lockable_t *rh = fs_rhash_open_filename(argv[i], 0);
             if (!rh) {
                 printf("couldn't open hash\n");
 

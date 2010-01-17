@@ -294,11 +294,15 @@ static unsigned char * handle_new_models (fs_backend *be, fs_segment segment,
 
   /* handle_new_models can be called after starting an import, thus
    * with a LOCK_EX or on its own which means we have to do it here */
-  int model_lock = 0;
+  int locking = 0;
   if (fs_lockable_test(be->models, LOCK_UN)) {
-      model_lock = 1;
+      locking = 1;
       if (fs_lockable_lock(be->models, LOCK_EX))
           return fsp_error_new(segment, "could not lock models");
+      if (fs_lockable_lock(be->predicates, LOCK_EX)) {
+          fs_lockable_lock(be->models, LOCK_UN);
+          return fsp_error_new(segment, "could not lock predicates");
+      }
   }
 
   int invalid_count = 0;
@@ -310,7 +314,11 @@ static unsigned char * handle_new_models (fs_backend *be, fs_segment segment,
     }
   }
  
-  if (model_lock) {
+  if (locking) {
+      if (fs_lockable_lock(be->predicates, LOCK_UN)) {
+          fs_lockable_lock(be->models, LOCK_UN);
+          return fsp_error_new(segment, "error releasing predicate lock");
+      }
       if (fs_lockable_lock(be->models, LOCK_UN))
           return fsp_error_new(segment, "error releasing model lock");
   }
@@ -347,6 +355,11 @@ static unsigned char * handle_start_import (fs_backend *be, fs_segment segment,
       fs_lockable_lock(be->models, LOCK_UN);
       return fsp_error_new(segment, "could not lock resources");
   }
+  if (fs_lockable_lock(be->predicates, LOCK_EX)) {
+      fs_lockable_lock(be->res, LOCK_UN);
+      fs_lockable_lock(be->models, LOCK_UN);
+      return fsp_error_new(segment, "could not lock predicates");
+  }
 
   fs_start_import(be, segment);
 
@@ -369,6 +382,11 @@ static unsigned char * handle_stop_import (fs_backend *be, fs_segment segment,
 
   int ret = fs_stop_import(be, segment);
 
+  if (fs_lockable_lock(be->predicates, LOCK_UN)) {
+      fs_lockable_lock(be->res, LOCK_UN);
+      fs_lockable_lock(be->models, LOCK_UN);
+      return fsp_error_new(segment, "could not unlock predicates");
+  }
   if (fs_lockable_lock(be->res, LOCK_UN)) {
       fs_lockable_lock(be->models, LOCK_UN);
       return fsp_error_new(segment, "could not unlock resources");

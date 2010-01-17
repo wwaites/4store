@@ -26,26 +26,34 @@ static int fs_lockable_sync(fs_lockable_t *hf)
     return 0;
 }
 
-int fs_lockable_lock(fs_lockable_t *hf, int operation)
+int fs_lockable_lock_debug(fs_lockable_t *hf, int operation, const char *file, int line)
 {
-    struct stat stat;
-
     /* this should not happen */
     fs_assert(hf);
+
+    //fs_error(LOG_INFO, "%s:%d fs_lockable_lock(%s): %01x", file, line, hf->filename, operation);
 
     /* It is an error to try to upgrade / downgrade locks */
     if ( (operation & LOCK_EX && hf->locktype & LOCK_SH) ||
          (operation & LOCK_SH && hf->locktype & LOCK_EX) ) {
-        fs_error(LOG_ERR, "fs_lockable_lock(%s): up/downgrading lock not permitted",
-                 hf->filename);
+        fs_error(LOG_ERR, "%s:%d fs_lockable_lock(%s): up/downgrading lock not permitted",
+                 file, line, hf->filename);
         return -1;
     }
 
     /* It is an error to request a lock while holding one already */
     if ( (operation & hf->locktype) & (LOCK_SH|LOCK_EX) ) {
-        fs_error(LOG_ERR, "fs_lockable_lock(%s): double lock", hf->filename);
+        fs_error(LOG_ERR, "%s:%d fs_lockable_lock(%s): double lock",
+                 file, line, hf->filename);
         return -1;
     }
+
+    return (hf->lock)(hf, operation);
+}
+
+static int fs_lockable_do_lock(fs_lockable_t *hf, int operation)
+{
+    struct stat stat;
 
     /* if we are unlocking while holding a write lock, flush data */
     if ( (hf->locktype & LOCK_EX) && (operation & LOCK_UN) ) {
@@ -181,6 +189,8 @@ int fs_lockable_init(fs_lockable_t *hf)
 
     /* set our flag to keep track of the lock type */
     hf->locktype = LOCK_UN;
+    /* and the pointer to the lock function */
+    hf->lock = fs_lockable_do_lock;
 
     return 0;
 }

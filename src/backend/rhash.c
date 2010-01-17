@@ -100,9 +100,13 @@ typedef struct _fs_rhash {
     fs_prefix_trie *prefixes;
     int prefix_count;
     char *prefix_strings[FS_MAX_PREFIXES];
-    fs_list *prefix_file;
+    fs_lockable_t *prefix_file; /* list */
     char *z_buffer;
     int z_buffer_size;
+
+    /* hooks for locking management */
+    int (*prefix_read_metadata)(fs_lockable_t *);
+    int (*do_lock)(fs_lockable_t *, int);
 } fs_rhash;
 #define rh_fd hf.fd
 #define rh_flags hf.flags
@@ -122,6 +126,10 @@ static int double_size(fs_rhash *rh);
 
 static int fs_rhash_read_header(fs_lockable_t *);
 static int fs_rhash_write_header(fs_lockable_t *);
+static int fs_rhash_load_prefixes(fs_rhash *);
+
+static int fs_rhash_prefix_read_metadata(fs_lockable_t *);
+static int fs_rhash_do_lock(fs_lockable_t *, int);
 
 static int compress_bcd(const char *in, char *out);
 static char *uncompress_bcd(unsigned char *bcd);
@@ -191,21 +199,37 @@ fs_lockable_t *fs_rhash_open_filename(const char *filename, int flags)
         return NULL;
     }
 
-    rh->prefixes = fs_prefix_trie_new();
-    rh->ptrie = fs_prefix_trie_new();
-
     char *prefix_filename = g_strdup_printf("%s.prefixes", rh->rh_filename);
     rh->prefix_file = fs_list_open_filename(prefix_filename,
                                             sizeof(struct prefix_file_line), flags);
     g_free(prefix_filename);
-
-    struct prefix_file_line pre;
-    fs_list_rewind(rh->prefix_file);
-    while (fs_list_next_value(rh->prefix_file, &pre)) {
-        fs_prefix_trie_add_code(rh->prefixes, pre.prefix, pre.code);
-        rh->prefix_strings[pre.code] = g_strdup(pre.prefix);
-        (rh->prefix_count)++;
+    if (!rh->prefix_file) {
+        g_free(rh->rh_filename);
+        g_free(rh->lex_filename);
+        free(rh->z_buffer);
+        free(rh);
+        return NULL;
     }
+
+    /* have to hook the read metadata method on the prefix list
+     * file so that if it has changed, we re-read our own prefix list
+     * it would probably be more efficient to somehow put the
+     * patricia trie directly on disc instead of re-constructing it */
+    rh->prefix_read_metadata = rh->prefix_file->read_metadata;
+    rh->prefix_file->read_metadata = fs_rhash_prefix_read_metadata;
+
+    /* prefixes won't have been loaded yet, so load them */
+    fs_lockable_lock(rh->prefix_file, LOCK_SH);
+    fs_rhash_load_prefixes(rh);
+    fs_lockable_lock(rh->prefix_file, LOCK_UN);
+
+    /* have to hook our lock routine as well to also lock the prefixes
+     * otherwise we risk spending a lot of time locking and unlocking
+     * them during data imports */
+    rh->do_lock = rh->hf.lock;
+    rh->hf.lock = fs_rhash_do_lock;
+
+    rh->ptrie = fs_prefix_trie_new();
 
     rh->lex_f = fopen(rh->lex_filename, ((flags & (O_WRONLY|O_RDWR)) ? "a+" : "r"));
     if (!rh->lex_f) {
@@ -216,6 +240,21 @@ fs_lockable_t *fs_rhash_open_filename(const char *filename, int flags)
     }
 
     return hf;
+}
+
+static int fs_rhash_do_lock(fs_lockable_t *hf, int operation)
+{
+    fs_rhash *rh = (fs_rhash *)hf;
+    /* first call our original locking routine */
+    if ((rh->do_lock)(hf, operation))
+        return -1;
+    /* great, that worked. now lock our prefix file in the same way */
+    if (fs_lockable_lock(rh->prefix_file, operation)) {
+        if (operation & (LOCK_SH|LOCK_EX)) /* release any lock we have acquired */
+            (rh->do_lock)(hf, LOCK_UN);
+        return -1;
+    }
+    return 0;
 }
 
 static int fs_rhash_memremap(fs_rhash *rh) {
@@ -238,6 +277,39 @@ static int fs_rhash_memremap(fs_rhash *rh) {
             rh->mmap_size = 0;
             return -1;
         }
+    }
+
+    return 0;
+}
+
+/* hook function for the prefix list's read_metadata */
+static int fs_rhash_prefix_read_metadata(fs_lockable_t *hf)
+{
+    fs_rhash *rh = (fs_rhash *)hf;
+
+    if ((rh->prefix_read_metadata)(hf))
+        return -1;
+
+    return fs_rhash_load_prefixes(rh);
+}
+
+/* this is always called with at least a read lock on the
+ * prefix_file */
+static int fs_rhash_load_prefixes(fs_rhash *rh)
+{
+    struct prefix_file_line pre;
+
+    if (rh->prefixes)
+        fs_prefix_trie_free(rh->prefixes);
+
+    rh->prefixes = fs_prefix_trie_new();
+    rh->prefix_count = 0;
+
+    fs_list_rewind_r(rh->prefix_file);
+    while (fs_list_next_value_r(rh->prefix_file, &pre)) {
+        fs_prefix_trie_add_code(rh->prefixes, pre.prefix, pre.code);
+        rh->prefix_strings[pre.code] = g_strdup(pre.prefix);
+        (rh->prefix_count)++;
     }
 
     return 0;
@@ -456,10 +528,9 @@ int fs_rhash_put_r(fs_lockable_t *hf, fs_resource *res)
                     fs_error(LOG_INFO, "adding prefix %d <%s>", rh->prefix_count, pre[i].prefix);
                     pfl.code = rh->prefix_count;
                     strcpy(pfl.prefix, pre[i].prefix);
-                    fs_list_add(rh->prefix_file, &pfl);
+                    fs_list_add_r(rh->prefix_file, &pfl);
                     (rh->prefix_count)++;
                 }
-                fs_list_flush(rh->prefix_file);
                 free(pre);
                 fs_prefix_trie_free(rh->ptrie);
                 rh->ptrie = fs_prefix_trie_new();

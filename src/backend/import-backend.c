@@ -249,19 +249,24 @@ int fs_quad_import_commit(fs_backend *be, int seg, int flags, int account)
     }
 
     fs_assert(fs_lockable_test(be->models, LOCK_EX));
+    fs_assert(fs_lockable_test(be->predicates, LOCK_EX));
 
     double then = fs_time();
 
     TIME(NULL);
 
     if (be->pended_import) {
+        for (int i=0; i<FS_PENDED_LISTS; i++)
+            fs_lockable_lock(be->pended[i], LOCK_EX);
 	for (int i=0; i<quad_pos; i++) {
 	    if (quad_buffer[i].skip) continue;
 
 	    const fs_rid pred = quad_buffer[i].quad[2];
 	    const int pend_list = (pred >> 40) % FS_PENDED_LISTS;
-	    fs_list_add(be->pended[pend_list], quad_buffer[i].quad);
+	    fs_list_add_r(be->pended[pend_list], quad_buffer[i].quad);
 	}
+        for (int i=0; i<FS_PENDED_LISTS; i++)
+            fs_lockable_lock(be->pended[i], LOCK_UN);
     } else {
 	for (int pass=0; pass<2; pass++) {
 	    if (pass == 0) {
@@ -292,7 +297,7 @@ int fs_quad_import_commit(fs_backend *be, int seg, int flags, int account)
 		    pt = fs_backend_get_ptree(be, pred, pass);
 		    if (!pt) {
 			fs_backend_open_ptree(be, pred);
-			int id = fs_list_add(be->predicates, &pred);
+			int id = fs_list_add_r(be->predicates, &pred);
 			if (pass == 0) pt = be->ptrees_priv[id].ptree_s;
 			else pt = be->ptrees_priv[id].ptree_o;
 		    }
@@ -315,7 +320,6 @@ int fs_quad_import_commit(fs_backend *be, int seg, int flags, int account)
 	    }
 	}
     }
-    fs_list_flush(be->predicates);
 
     /* append to model indexes */
     qsort(quad_buffer, quad_pos, sizeof(struct q_buf), qbuf_sort_m);
