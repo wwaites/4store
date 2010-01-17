@@ -30,6 +30,7 @@
 #include "backend.h"
 #include "ptree.h"
 #include "chain.h"
+#include "lockable.h"
 #include "common/params.h"
 #include "common/hash.h"
 #include "common/error.h"
@@ -85,9 +86,7 @@ struct ptree_header {
 } FS_PACKED;
 
 struct _fs_ptree {
-    int fd;
-    char *filename;
-    int flags;              // open() flags
+    fs_lockable_t l;
     off_t file_length;
     void *ptr;              // mmap'd address
     struct ptree_header *header;
@@ -95,6 +94,11 @@ struct _fs_ptree {
     leaf *leaves;
     fs_ptable *table;
 };
+#define pt_fd l.fd
+#define pt_flags l.flags
+#define pt_filename l.filename
+#define pt_read_metadata l.read_metadata
+#define pt_write_metadata l.write_metadata
 
 typedef struct _tree_pos {
     nodeid node;
@@ -113,9 +117,6 @@ struct _fs_ptree_it {
     int traverse;
     tree_pos *stack;
 };
-
-int fs_ptree_grow_nodes(fs_ptree *pt);
-int fs_ptree_grow_leaves(fs_ptree *pt);
 
 fs_ptree *fs_ptree_open(fs_backend *be, fs_rid pred, char pk, int flags, fs_ptable *chain)
 {
@@ -144,15 +145,29 @@ node *node_ref(fs_ptree *pt, nodeid n)
     return pt->nodes+offset;
 }
 
-static void map_file(fs_ptree *pt)
+static int map_file(fs_ptree *pt)
 {
-    pt->ptr = mmap(NULL, pt->file_length, PROT_READ | PROT_WRITE, MAP_SHARED, pt->fd, 0);
+    pt->ptr = mmap(NULL, pt->file_length, PROT_READ | PROT_WRITE, MAP_SHARED, pt->pt_fd, 0);
     if (pt->ptr == (void *)-1) {
-        fs_error(LOG_ERR, "failed to mmap '%s'", pt->filename);
+        fs_error(LOG_ERR, "failed to mmap '%s'", pt->pt_filename);
+        return -1;
     }
     pt->header = pt->ptr;
     pt->nodes = (node *)((char *)(pt->ptr) + sizeof(struct ptree_header));
     pt->leaves = (leaf *)(pt->nodes);
+    return 0;
+}
+
+static int remap_file(fs_lockable_t *l)
+{
+    fs_ptree *pt = (fs_ptree *)l;
+    off_t len = lseek(pt->pt_fd, 0, SEEK_END);
+    if (len != pt->file_length) {
+        munmap(pt->ptr, pt->file_length);
+        pt->file_length = len;
+        return map_file(pt);
+    }
+    return 0;
 }
 
 fs_ptree *fs_ptree_open_filename(const char *filename, int flags, fs_ptable *chain)
@@ -166,48 +181,72 @@ fs_ptree *fs_ptree_open_filename(const char *filename, int flags, fs_ptable *cha
     }
 
     fs_ptree *pt = calloc(1, sizeof(fs_ptree));
-    pt->fd = open(filename, FS_O_NOATIME | flags, FS_FILE_MODE);
-    pt->flags = flags;
-    if (pt->fd == -1) {
+    fs_lockable_t *l = (fs_lockable_t *)pt;
+    pt->pt_fd = open(filename, FS_O_NOATIME | flags, FS_FILE_MODE);
+    pt->pt_flags = flags;
+    if (pt->pt_fd == -1) {
         fs_error(LOG_ERR, "cannot open ptree file '%s': %s", filename, strerror(errno));
         free(pt);
         return NULL;
     }
-    pt->filename = g_strdup(filename);
-    
-    if (flags & (O_WRONLY | O_RDWR)) {
-        flock(pt->fd, LOCK_EX);
+    pt->pt_filename = g_strdup(filename);
+    pt->table = chain;
+
+    pt->pt_read_metadata = remap_file;
+    if (fs_lockable_init(l)) {
+        g_free(pt->pt_filename);
+        close(pt->pt_fd);
+        free(pt);
+        return NULL;
     }
-    pt->file_length = lseek(pt->fd, 0, SEEK_END);
+   
+    pt->file_length = lseek(pt->pt_fd, 0, SEEK_END);
     if ((flags & O_TRUNC) || pt->file_length == 0) {
-        fs_ptree_write_header(pt);
+        if (fs_lockable_lock(l, LOCK_EX) || fs_ptree_write_header(pt)) {
+            g_free(pt->pt_filename); 
+            close(pt->pt_fd);
+            free(pt);
+            return NULL;
+        } 
     } else {
-        map_file(pt);
+        if (fs_lockable_lock(l, LOCK_SH), map_file(pt)) {
+            g_free(pt->pt_filename);
+            close(pt->pt_fd);
+            free(pt);
+            return NULL;
+        }
+    }
+    if (fs_lockable_lock(l, LOCK_UN)) {
+        g_free(pt->pt_filename);
+        close(pt->pt_fd);
+        free(pt);
+        return NULL;
     }
 
     if (pt->header->id != FS_PTREE_ID) {
-        fs_error(LOG_ERR, "%s does not appear to be a ptree file", pt->filename);
-
+        fs_error(LOG_ERR, "%s does not appear to be a ptree file", pt->pt_filename);
+        g_free(pt->pt_filename);
+        close(pt->pt_fd);
+        free(pt);
         return NULL;
     }
-    if (pt->header->revision != FS_PTREE_REVISION) {
-        fs_error(LOG_ERR, "%s is not a revision %d ptree", pt->filename, FS_PTREE_REVISION);
 
+    if (pt->header->revision != FS_PTREE_REVISION) {
+        fs_error(LOG_ERR, "%s is not a revision %d ptree", pt->pt_filename, FS_PTREE_REVISION);
+        g_free(pt->pt_filename);
+        close(pt->pt_fd);
+        free(pt);
         return NULL;
     }
     
-    pt->table = chain;
-
-    if (pt->header->node_free == 0) {
-        pt->header->node_free = FS_PTREE_NULL_NODE;
-    }
-
     return pt;
 }
 
 int fs_ptree_write_header(fs_ptree *pt)
 {
     struct ptree_header header;
+
+    fs_assert(fs_lockable_test(pt, LOCK_EX));
 
     memset(&header, 0, sizeof(header));
     header.id = FS_PTREE_ID;
@@ -223,15 +262,15 @@ int fs_ptree_write_header(fs_ptree *pt)
     /* reserve the null leaf */
     header.leaf_base = header.node_size * sizeof(node) / sizeof(leaf) + 1;
     header.alloc = header.leaf_size * sizeof(leaf);
-    if (pwrite(pt->fd, &header, sizeof(header), 0) == -1) {
+    if (pwrite(pt->pt_fd, &header, sizeof(header), 0) == -1) {
         fs_error(LOG_CRIT, "failed to write header on %s: %s",
-                 pt->filename, strerror(errno));
+                 pt->pt_filename, strerror(errno));
 
         return 1;
     }
     pt->file_length = sizeof(struct ptree_header) + header.alloc;
     char junk = '\0';
-    if (pwrite(pt->fd, &junk, 1, pt->file_length) == -1) {
+    if (pwrite(pt->pt_fd, &junk, 1, pt->file_length) == -1) {
         fs_error(LOG_ERR, "failed to extend ptree file");
     }
     map_file(pt);
@@ -242,10 +281,14 @@ int fs_ptree_write_header(fs_ptree *pt)
         root->branch[i] = FS_PTREE_NULL_NODE;
     }
 
+    if (pt->header->node_free == 0) {
+        pt->header->node_free = FS_PTREE_NULL_NODE;
+    }
+
     return 0;
 }
 
-int fs_ptree_grow_nodes(fs_ptree *pt)
+static int fs_ptree_grow_nodes(fs_ptree *pt)
 {
     char junk = '\0';
     pt->header->node_base = pt->header->alloc / sizeof(node);
@@ -257,7 +300,7 @@ int fs_ptree_grow_nodes(fs_ptree *pt)
     off_t alloc = pt->header->alloc;
     munmap(pt->ptr, pt->file_length);
     pt->file_length = sizeof(struct ptree_header) + alloc;
-    if (pwrite(pt->fd, &junk, 1, pt->file_length) == -1) {
+    if (pwrite(pt->pt_fd, &junk, 1, pt->file_length) == -1) {
         fs_error(LOG_ERR, "failed to grow ptree file");
 
         return 1;
@@ -267,7 +310,7 @@ int fs_ptree_grow_nodes(fs_ptree *pt)
     return 0;
 }
 
-int fs_ptree_grow_leaves(fs_ptree *pt)
+static int fs_ptree_grow_leaves(fs_ptree *pt)
 {
     char junk = '\0';
     pt->header->leaf_base = pt->header->alloc / sizeof(leaf);
@@ -279,7 +322,7 @@ int fs_ptree_grow_leaves(fs_ptree *pt)
     off_t alloc = pt->header->alloc;
     munmap(pt->ptr, pt->file_length);
     pt->file_length = sizeof(struct ptree_header) + alloc;
-    if (pwrite(pt->fd, &junk, 1, pt->file_length) == -1) {
+    if (pwrite(pt->pt_fd, &junk, 1, pt->file_length) == -1) {
         fs_error(LOG_ERR, "failed to grow ptree file");
 
         return 1;
@@ -291,14 +334,14 @@ int fs_ptree_grow_leaves(fs_ptree *pt)
 
 void fs_ptree_free_node(fs_ptree *pt, nodeid n)
 {
+    fs_assert(fs_lockable_test(pt, LOCK_EX));
+
     if (IS_LEAF(n)) {
         fs_error(LOG_ERR, "tried to free leaf as node");
-
         return;
     }
     if (n == FS_PTREE_ROOT_NODE) {
         fs_error(LOG_ERR, "tried to free root node");
-
         return;
     }
     node *nr = NODE_REF(pt, n);
@@ -308,6 +351,8 @@ void fs_ptree_free_node(fs_ptree *pt, nodeid n)
 
 nodeid fs_ptree_new_node(fs_ptree *pt)
 {
+    fs_assert(fs_lockable_test(pt, LOCK_EX));
+
     if (pt->header->node_free != FS_PTREE_NULL_NODE) {
         nodeid n = pt->header->node_free;
         if (!IS_NODE(n)) {
@@ -340,9 +385,10 @@ nodeid fs_ptree_new_node(fs_ptree *pt)
 
 void fs_ptree_free_leaf(fs_ptree *pt, nodeid n)
 {
+    fs_assert(fs_lockable_test(pt, LOCK_EX));
+
     if (IS_NODE(n)) {
         fs_error(LOG_ERR, "tried to free node as leaf");
-
         return;
     }
     leaf *lr = LEAF_REF(pt, n);
@@ -352,6 +398,8 @@ void fs_ptree_free_leaf(fs_ptree *pt, nodeid n)
 
 nodeid fs_ptree_new_leaf(fs_ptree *pt)
 {
+    fs_assert(fs_lockable_test(pt, LOCK_EX));
+
     if (pt->header->leaf_free != 0) {
         nodeid n = pt->header->leaf_free;
         leaf *lr = LEAF_REF(pt, n);
@@ -361,7 +409,6 @@ nodeid fs_ptree_new_leaf(fs_ptree *pt)
             lr->block = 0;
             lr->length = 0;
         }
-
         return n;
     }
 
@@ -480,9 +527,10 @@ int fs_ptree_add(fs_ptree *pt, fs_rid pk, fs_rid pair[2], int force)
 {
     if (!pt) {
         fs_error(LOG_ERR, "tried to add to NULL ptree");
-
         return 1;
     }
+    fs_assert(fs_lockable_test(pt, LOCK_EX));
+
     nodeid lid = get_or_create_leaf(pt, pk);
     if (!pair) return 1;
     leaf *lref = LEAF_REF(pt, lid);
@@ -580,7 +628,7 @@ static enum recurse_action collapse_by_pk_recurse(fs_ptree *pt, fs_rid pk, fs_in
             fs_ptree_free_leaf(pt, no->branch[b]);
             no->branch[b] = FS_PTREE_NULL_NODE;
         } else {
-            fs_error(LOG_ERR, "hit an unexpected non-empty leaf recursing pk %016llx in %s", pk, pt->filename);
+            fs_error(LOG_ERR, "hit an unexpected non-empty leaf recursing pk %016llx in %s", pk, pt->pt_filename);
         }
     } else {
         enum recurse_action action = collapse_by_pk_recurse(pt, pk, no->branch[b], level+1);
@@ -614,10 +662,10 @@ int fs_ptree_remove_all(fs_ptree *pt, fs_rid pair[2])
 {
     if (!pt) {
         fs_error(LOG_ERR, "tried to remove from to NULL ptree");
-
         return 1;
     }
     if (!pair) return 1;
+    fs_assert(fs_lockable_test(pt, LOCK_EX));
 
     int removed = 0;
     remove_all_recurse(pt, pair, FS_PTREE_ROOT_NODE, &removed);
@@ -634,20 +682,18 @@ int fs_ptree_remove(fs_ptree *pt, fs_rid pk, fs_rid pair[2])
 {
     if (!pt) {
         fs_error(LOG_ERR, "tried to remove from to NULL ptree");
-
         return 1;
     }
+    fs_assert(fs_lockable_test(pt, LOCK_EX));
 
     nodeid lid = get_leaf(pt, pk);
     if (!lid) {
         fs_error(LOG_ERR, "leaf for pk %016llx not found", pk);
-    
         return 1;
     }
     leaf *lref = LEAF_REF(pt, lid);
     if (!lref->block) {
         fs_error(LOG_ERR, "block for leaf %x not found", lid);
-
         return 1;
     }
 
@@ -689,9 +735,9 @@ fs_ptree_it *fs_ptree_search(fs_ptree *pt, fs_rid pk, fs_rid pair[2])
 {
     if (!pt) {
         fs_error(LOG_ERR, "tried to search NULL ptree");
-
         return NULL;
     }
+    fs_assert(fs_lockable_test(pt, (LOCK_SH|LOCK_EX)));
 
     nodeid lid = get_leaf(pt, pk);
     if (!lid) {
@@ -710,18 +756,19 @@ fs_ptree_it *fs_ptree_search(fs_ptree *pt, fs_rid pk, fs_rid pair[2])
 
 int fs_ptree_it_get_length(fs_ptree_it *it)
 {
-    if (it) return it->length;
-
-    return 0;
+    if (!it) return 0;
+    fs_assert(fs_lockable_test(it->pt, (LOCK_SH|LOCK_EX)));
+    return it->length;
 }
 
 int fs_ptree_it_next(fs_ptree_it *it, fs_rid pair[2])
 {
     if (!it) {
         fs_error(LOG_ERR, "tried to iterate NULL iterator");
-
         return 0;
     }
+
+    fs_assert(fs_lockable_test(it->pt, (LOCK_SH|LOCK_EX)));
 
     (it->step)++;
 
@@ -748,12 +795,13 @@ int fs_ptree_it_next(fs_ptree_it *it, fs_rid pair[2])
 int fs_ptree_it_next_quad(fs_ptree_it *it, fs_rid quad[4])
 {
     fs_error(LOG_CRIT, "not implemented");
-
     return 0;
 }
 
 fs_ptree_it *fs_ptree_traverse(fs_ptree *pt, fs_rid mrid)
 {
+    fs_assert(fs_lockable_test(pt, (LOCK_SH|LOCK_EX)));
+
     fs_ptree_it *it = calloc(1, sizeof(fs_ptree_it));
     it->pt = pt;
     it->traverse = 1;
@@ -768,6 +816,8 @@ fs_ptree_it *fs_ptree_traverse(fs_ptree *pt, fs_rid mrid)
 
 int fs_ptree_traverse_next(fs_ptree_it *it, fs_rid quad[4])
 {
+    fs_assert(fs_lockable_test(it->pt, (LOCK_SH|LOCK_EX)));
+
     top:;
     while (it->block) {
         int matched = 0;
@@ -823,6 +873,7 @@ void fs_ptree_it_free(fs_ptree_it *it)
 
 int fs_ptree_count(fs_ptree *pt)
 {
+    fs_assert(fs_lockable_test(pt, (LOCK_SH|LOCK_EX)));
     return pt->header->count;
 }
 
@@ -830,38 +881,32 @@ int fs_ptree_unlink(fs_ptree *pt)
 {
     if (!pt) {
         fs_error(LOG_ERR, "tried to unlink NULL ptree");
-
         return 1;
     }
-    if (!pt->filename) {
+    if (!pt->pt_filename) {
         fs_error(LOG_ERR, "tried to unlink closed ptree");
-
         return 1;
     }
 
-    return unlink(pt->filename);
+    return unlink(pt->pt_filename);
 }
 
 int fs_ptree_close(fs_ptree *pt)
 {
     if (!pt) {
         fs_error(LOG_ERR, "tried to close NULL ptree");
-
         return 1;
     }
-    if (!pt->filename) {
+    if (!pt->pt_filename) {
         fs_error(LOG_ERR, "tried to close already closed ptree");
-
         return 1;
     }
     if (munmap(pt->ptr, pt->file_length) == -1) {
-        fs_error(LOG_CRIT, "failed to unmap '%s'", pt->filename);
+        fs_error(LOG_CRIT, "failed to unmap '%s'", pt->pt_filename);
     }
-    flock(pt->fd, LOCK_UN);
-    close(pt->fd);
-    pt->fd = -1;
-    g_free(pt->filename);
-    pt->filename = NULL;
+    flock(pt->pt_fd, LOCK_UN);
+    close(pt->pt_fd);
+    g_free(pt->pt_filename);
     free(pt);
 
     return 0;
@@ -880,6 +925,7 @@ static void recurse_print(fs_ptree *pt, nodeid n, char *buffer, int pos, struct 
     node *no = node_ref(pt, n);
     int branches = 0;
     int leaves = 0;
+
     for (int b=0; b<FS_PTREE_BRANCHES; b++) {
         sprintf(buffer+pos, "%x", b);
         if (no->branch[b] == FS_PTREE_NULL_NODE) {
@@ -942,7 +988,9 @@ static void recurse_print(fs_ptree *pt, nodeid n, char *buffer, int pos, struct 
 
 void fs_ptree_print(fs_ptree *pt, FILE *out, int verbosity)
 {
-    fprintf(out, "ptree: %s\n", pt->filename);
+    fs_assert(fs_lockable_test(pt, (LOCK_SH|LOCK_EX)));
+
+    fprintf(out, "ptree: %s\n", pt->pt_filename);
     fprintf(out, "nodes: %d/%d\n", pt->header->node_count, pt->header->node_alloc);
     fprintf(out, "leaves: %d/%d\n", pt->header->leaf_count, pt->header->leaf_alloc);
     fprintf(out, "rows:    %lld\n", (long long)pt->header->count);
@@ -973,7 +1021,7 @@ void fs_ptree_print(fs_ptree *pt, FILE *out, int verbosity)
     fprintf(out, "freed leaves: %d\n", free_leaves);
     fprintf(out, "deadends:     %d (%d%%)\n", stats.deadends, 100 * stats.deadends / (stats.nodes * FS_PTREE_BRANCHES));
     if (stats.count != pt->header->count) {
-        fprintf(out, "ERROR: number of rows in header (%d) does not match data (%d) in %s\n", (int)pt->header->count, stats.count, pt->filename);
+        fprintf(out, "ERROR: number of rows in header (%d) does not match data (%d) in %s\n", (int)pt->header->count, stats.count, pt->pt_filename);
     }
     if (stats.leaves + free_leaves != pt->header->leaf_count) {
         fprintf(out, "ERROR: %d leaves have been leaked\n", 

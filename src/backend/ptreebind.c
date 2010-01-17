@@ -31,7 +31,6 @@ int main(int argc, char *argv[])
 {
     if (argc < 4) {
         printf("Usage: %s </path/to/ptable> </path/to/ptree> <PK>\n", argv[0]);
-
         return 1;
     }
 
@@ -39,7 +38,6 @@ int main(int argc, char *argv[])
     table = fs_ptable_open_filename(argv[1], O_RDWR);
     if (!table) {
         printf("failed to open ptable file\n");
-
         return 2;
     }
     fs_ptable_print(table, stdout, 0);
@@ -47,7 +45,6 @@ int main(int argc, char *argv[])
     fs_ptree *tree = fs_ptree_open_filename(argv[2], O_RDWR, table);
     if (!tree) {
         printf("failed to open ptree file\n");
-
         return 2;
     }
     errno = 0;
@@ -60,6 +57,7 @@ int main(int argc, char *argv[])
     }
     printf("PK %016llx\n", pk);
     fs_rid pair[2] = {FS_RID_NULL, FS_RID_NULL};
+    fs_lockable_lock(tree, LOCK_SH);
     fs_ptree_it *it = fs_ptree_search(tree, pk, pair);
     if (!it) {
         printf("no match\n");
@@ -67,6 +65,7 @@ int main(int argc, char *argv[])
     while (it && fs_ptree_it_next(it, pair)) {
         printf("%016llx %016llx\n", pair[0], pair[2]);
     }
+    fs_lockable_lock(tree, LOCK_UN);
     fs_ptree_close(tree);
 
     return 0;

@@ -310,7 +310,9 @@ int fs_quad_import_commit(fs_backend *be, int seg, int flags, int account)
 		    ds0 = 0; ds1 = 1; pk = 3;
 		}
 		fs_rid pair[2] = { quad_buffer[i].quad[ds0], quad_buffer[i].quad[ds1] };
+                fs_lockable_lock(pt, LOCK_EX);
 		int ret = fs_ptree_add(pt, quad_buffer[i].quad[pk], pair, force);
+                fs_lockable_lock(pt, LOCK_UN);
 		if (pass == 0 && ret) {
 		    quad_buffer[i].skip = 1;
 		}
@@ -418,6 +420,13 @@ static int remove_by_search(fs_backend *be, fs_rid model, fs_index_node model_id
 	    continue;
 	}
 
+        if (fs_lockable_lock(sfp, LOCK_EX))
+            return ++errors;
+        if (fs_lockable_lock(ofp, LOCK_EX)) {
+            fs_lockable_lock(sfp, LOCK_UN);
+            return ++errors;
+        }
+
 	fs_tbchain_it *it =
 	    fs_tbchain_new_iterator(be->model_list, model_id);
 	fs_rid triple[3];
@@ -435,6 +444,13 @@ static int remove_by_search(fs_backend *be, fs_rid model, fs_index_node model_id
 		}
 	    }
 	}
+
+        if (fs_lockable_lock(ofp, LOCK_UN)) {
+            fs_lockable_lock(sfp, LOCK_UN);
+            return ++errors;
+        }
+        if (fs_lockable_lock(sfp, LOCK_UN))
+            return ++errors;
     }
     fs_rid_set_free(preds);
     errors += fs_tbchain_remove_chain(be->model_list, model_id);
@@ -524,10 +540,22 @@ int fs_delete_models(fs_backend *be, int seg, fs_rid_vector *mvec)
 		/* if we had a remove function that took a list of model
 		   rids we could be more efficient here, but really we'd
 		   like to use a model list where possible  */
-
+                if (fs_lockable_lock(be->ptrees_priv[i].ptree_s, LOCK_EX)) {
+                    errs++;
+                    continue;
+                }
 		if (!fs_ptree_remove_all(be->ptrees_priv[i].ptree_s, pair)) {
+                    if (fs_lockable_lock(be->ptrees_priv[i].ptree_o, LOCK_EX)) {
+                        fs_lockable_lock(be->ptrees_priv[i].ptree_s, LOCK_UN);
+                        errs++;
+                        continue;
+                    }
 		    fs_ptree_remove_all(be->ptrees_priv[i].ptree_o, pair);
+                    if (fs_lockable_lock(be->ptrees_priv[i].ptree_o, LOCK_UN))
+                        errs++;
 		}
+                if (fs_lockable_lock(be->ptrees_priv[i].ptree_s, LOCK_UN))
+                    errs++;
 	    }
         }
     }

@@ -16,7 +16,7 @@ static int fs_lockable_sync(fs_lockable_t *hf)
     assert(hf->locktype & LOCK_EX);
 
     /* write out any necessary metadata */
-    if ((hf->write_metadata)(hf))
+    if (hf->write_metadata && (hf->write_metadata)(hf))
         return -1;
     /* flush data to disc */
     if (fs_fsync(hf->fd)) {
@@ -76,7 +76,7 @@ static int fs_lockable_do_lock(fs_lockable_t *hf, int operation)
     hf->locktype = operation;
 
     /* if we are acquiring the lock, read any metadata if necessary */
-    if ( (operation & (LOCK_EX|LOCK_SH)) ) {
+    if ( hf->read_metadata && (operation & (LOCK_EX|LOCK_SH)) ) {
         if (fstat(hf->fd, &stat) < 0) {
             fs_error(LOG_ERR, "fstat(%s): %s", hf->filename, strerror(errno));
             return -1;
@@ -109,7 +109,7 @@ int fs_lockable_init(fs_lockable_t *hf)
             fs_error(LOG_ERR, "flock(%s): %s", hf->filename, strerror(errno));
             return -1;
         }
-        if ( (hf->write_metadata)(hf) ) {
+        if ( hf->write_metadata && (hf->write_metadata)(hf) ) {
             if (flock(hf->fd, LOCK_UN))
                 fs_error(LOG_ERR, "flock(%s): %s", hf->filename, strerror(errno));
             return -1;
@@ -145,7 +145,7 @@ int fs_lockable_init(fs_lockable_t *hf)
                 return -1;
             }
             if (file_length == 0) {
-                if ( (hf->write_metadata)(hf) ) {
+                if ( hf->write_metadata && (hf->write_metadata)(hf) ) {
                     flock(hf->fd, LOCK_UN); 
                     return -1;
                 }
@@ -166,7 +166,7 @@ int fs_lockable_init(fs_lockable_t *hf)
     }
 
     /* we are now holding a read lock, read in the header */
-    if ( (hf->read_metadata)(hf) ) {
+    if ( hf->read_metadata && (hf->read_metadata)(hf) ) {
         if (flock(hf->fd, LOCK_UN))
             fs_error(LOG_ERR, "flock(%s): %s", hf->filename, strerror(errno));
         return -1;

@@ -3,6 +3,7 @@
 
 #include "backend.h"
 #include "ptable.h"
+#include "lockable.h"
 
 typedef struct _fs_ptree fs_ptree;
 typedef struct _fs_ptree_it fs_ptree_it;

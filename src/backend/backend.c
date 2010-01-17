@@ -322,7 +322,7 @@ static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 	fs_rid quad[4];
 	fs_rid pred = FS_RID_NULL;
 	fs_ptree *current_tree = NULL;
-        fs_lockable_lock(be->predicates, LOCK_EX);
+        //fs_lockable_lock(be->predicates, LOCK_EX); locked by transaction...
 	for (int i=0; i<FS_PENDED_LISTS; i++) {
 	    fs_lockable_lock(be->pended[i], LOCK_EX); /* XXX retval */
 
@@ -346,7 +346,9 @@ static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 		    }
 		}
 		fs_rid pair[2] = { quad[0], quad[3] };
+                fs_lockable_lock(current_tree, LOCK_EX); // XX performance
 		fs_ptree_add(current_tree, quad[1], pair, 0);
+                fs_lockable_lock(current_tree, LOCK_UN);
 	    }
 
 	    /* process O ptrees */
@@ -364,7 +366,9 @@ static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 		    }
 		}
 		fs_rid pair[2] = { quad[0], quad[1] };
+                fs_lockable_lock(current_tree, LOCK_EX); // XX performance
 		fs_ptree_add(current_tree, quad[3], pair, 0);
+                fs_lockable_lock(current_tree, LOCK_UN);
 	    }
 
 	    /* cleanup pended lists */
@@ -373,7 +377,7 @@ static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 	    fs_list_close(be->pended[i]);
 	    be->pended[i] = NULL;
 	}
-        fs_lockable_lock(be->predicates, LOCK_UN);
+        //fs_lockable_lock(be->predicates, LOCK_UN);
 
 	be->pended_import = 0;
     }
@@ -501,7 +505,9 @@ int fs_backend_open_ptree(fs_backend *be, fs_rid pred)
     be->ptrees_priv[be->ptree_length].ptree_o = NULL;
     be->ptrees_priv[be->ptree_length].pred = pred;
     fs_backend_ptree_limited_open(be, be->ptree_length);
+    fs_lockable_lock(be->ptrees_priv[be->ptree_length].ptree_s, LOCK_SH);
     be->approx_size += fs_ptree_count(be->ptrees_priv[be->ptree_length].ptree_s);
+    fs_lockable_lock(be->ptrees_priv[be->ptree_length].ptree_s, LOCK_UN);
 
     return (be->ptree_length)++;
 }

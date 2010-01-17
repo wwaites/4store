@@ -38,16 +38,16 @@ int main(int argc, char *argv[])
     fs_ptable *ptbl = fs_ptable_open_filename(tbl, O_CREAT | O_TRUNC | O_RDWR);
     if (!ptbl) {
         printf("failed to create ptable file\n");
-
         return 1;
     }
     fs_ptree *pt = fs_ptree_open_filename(argv[1], O_CREAT | O_TRUNC | O_RDWR, ptbl);
     if (!pt) {
         printf("failed to create ptree file\n");
-
         return 1;
     }
+    fs_lockable_lock(pt, LOCK_EX);
     fs_ptree_add(pt, 0x223456789abcdef0LL, NULL, 0);
+    fs_lockable_lock(pt, LOCK_UN);
     fs_ptable_close(ptbl);
     fs_ptree_close(pt);
 
@@ -55,9 +55,9 @@ int main(int argc, char *argv[])
     pt = fs_ptree_open_filename(argv[1], O_RDWR, ptbl);
     if (!pt) {
         printf("failed to reopen ptree file\n");
-
         return 1;
     }
+    fs_lockable_lock(pt, LOCK_EX);
     fs_ptree_add(pt, 0x123456789abcdef0LL, NULL, 0);
     fs_ptree_add(pt, 0x123456789abcdef0LL, NULL, 0);
     fs_ptree_add(pt, 0x1234567a9abcdef0LL, NULL, 0);
@@ -77,11 +77,14 @@ int main(int argc, char *argv[])
         fs_ptree_add(pt, s, pair, 0);
     }
     double now = fs_time();
+    fs_lockable_lock(pt, LOCK_UN);
     printf("imported %d rows/s\n", (int)(ITS/(now-then)));
-#if 0
-    fs_ptree_print(pt, stdout);
-    printf("\n");
-    fs_chain_print(ch, stdout, 2);
+#if 1
+    fs_lockable_lock(pt, LOCK_SH);
+    fs_ptree_print(pt, stdout, 0);
+    fs_lockable_lock(pt, LOCK_UN);
+//    printf("\n");
+//    fs_chain_print(ch, stdout, 2);
 #endif
     fs_ptree_close(pt);
 

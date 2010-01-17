@@ -32,6 +32,7 @@
 #include "common/error.h"
 #include "common/hash.h"
 #include "tlist.h"
+#include "lockable.h"
 #include "backend.h"
 #include "backend-intl.h"
 #include "query-backend.h"
@@ -47,27 +48,27 @@ static int slot_bits[4] = {
     FS_BIND_OBJECT
 };
 
-static fs_ptree_it *fs_backend_get_matches(fs_backend *be, fs_rid quad[4], int flags)
+static fs_ptree_it *fs_backend_get_matches(fs_backend *be, fs_rid quad[4], int flags, fs_ptree **ptp)
 {
-    fs_ptree *pt = NULL;
     fs_rid pk;
     fs_rid pair[2];
 
     if (flags & FS_BIND_BY_SUBJECT) {
-	pt = fs_backend_get_ptree(be, quad[2], 0);
+	*ptp = fs_backend_get_ptree(be, quad[2], 0);
 	pk = quad[1];
 	pair[0] = quad[0];
 	pair[1] = quad[3];
     } else {
-	pt = fs_backend_get_ptree(be, quad[2], 1);
+	*ptp = fs_backend_get_ptree(be, quad[2], 1);
 	pk = quad[3];
 	pair[0] = quad[0];
 	pair[1] = quad[1];
     }
 
-    if (!pt) return NULL;
+    if (!*ptp) return NULL;
 
-    return fs_ptree_search(pt, pk, pair);
+    fs_lockable_locka(*ptp, LOCK_SH);
+    return fs_ptree_search(*ptp, pk, pair);
 }
 
 static int graph_ok(const fs_rid ref[4], int flags)
@@ -223,9 +224,11 @@ fs_rid_vector **fs_bind(fs_backend *be, fs_segment segment, unsigned int tobind,
 	int outpos = 0;
 	for (int i=0; i<length; i++) {
 	    fs_backend_ptree_limited_open(be, i);
+            fs_lockable_lock(be->ptrees_priv[i].ptree_s, LOCK_SH);
 	    if (fs_ptree_count(be->ptrees_priv[i].ptree_s) > 0) {
 		ret[0]->data[outpos++] = be->ptrees_priv[i].pred;
 	    }
+            fs_lockable_lock(be->ptrees_priv[i].ptree_s, LOCK_UN);
 	}
 	ret[0]->length = outpos;
 
@@ -247,6 +250,8 @@ fs_rid_vector **fs_bind(fs_backend *be, fs_segment segment, unsigned int tobind,
 	FS_BIND_DISTINCT && mvl == 0 && svl == 0 && pvl == 1 && ovl == 0) {
 	fs_ptree *pt = fs_backend_get_ptree(be, pv->data[0], 0);
 	if (pt) {
+            if (fs_lockable_lock(pt, LOCK_SH)) // free return values!
+                return NULL;
 	    fs_rid_set *set = fs_rid_set_new();
 	    fs_rid quad[4] = { FS_RID_NULL, FS_RID_NULL, pv->data[0],
 			       FS_RID_NULL };
@@ -259,6 +264,8 @@ fs_rid_vector **fs_bind(fs_backend *be, fs_segment segment, unsigned int tobind,
 	    }
 	    fs_ptree_it_free(it);
 	    fs_rid_vector_append_set(ret[0], set);
+            if (fs_lockable_lock(pt, LOCK_UN)) // free return values!
+                return NULL;
 	}
 
 	be->out_time[segment].bind_count++;
@@ -334,6 +341,8 @@ fs_error(LOG_INFO, "bind() branch");
 	    for (int p=0; p<pvl && count<limit; p++) {
 		fs_ptree *pt = fs_backend_get_ptree(be, pv->data[p], 0);
 		if (!pt) continue;
+                if (fs_lockable_lock(pt, LOCK_SH)) // free return values!
+                    return NULL;
 		for (int m=0; m<ml && count<limit; m++) {
 		    fs_rid quad[4] = { FS_RID_NULL, FS_RID_NULL, pv->data[p],
 				       FS_RID_NULL };
@@ -349,6 +358,8 @@ fs_error(LOG_INFO, "bind() branch");
 		    }
 		    fs_ptree_it_free(it);
 		}
+                if (fs_lockable_lock(pt, LOCK_UN)) // free return values!
+                    return NULL;
 	    }
 	} else {
 #ifdef DEBUG_BRANCH
@@ -359,6 +370,8 @@ fs_error(LOG_INFO, "bind() branch");
 		fs_backend_ptree_limited_open(be, p); 
 		fs_ptree *pt = be->ptrees_priv[p].ptree_s;
 		if (!pt) continue;
+                if (fs_lockable_lock(pt, LOCK_SH)) // free return values!
+                    return NULL;
 		for (int m=0; m<ml; m++) {
 		    fs_rid quad[4] = { FS_RID_NULL, FS_RID_NULL,
 				       be->ptrees_priv[p].pred, FS_RID_NULL };
@@ -374,6 +387,8 @@ fs_error(LOG_INFO, "bind() branch");
 		    }
 		    fs_ptree_it_free(it);
 		}
+                if (fs_lockable_lock(pt, LOCK_UN)) // free return values!
+                    return NULL;
 	    }
 	}
     /* query like (_ s p _) */
@@ -387,6 +402,8 @@ fs_error(LOG_INFO, "bind() branch");
 	    for (int p=0; p<pvl && count<limit; p++) {
 		fs_ptree *pt = fs_backend_get_ptree(be, pv->data[p], 0);
 		if (!pt) continue;
+                if (fs_lockable_lock(pt, LOCK_SH)) // free return value!
+                    return NULL;
 		for (int s=0; s<svl; s++) {
 		    fs_rid pk = sv->data[s];
 		    fs_rid pair[2] = { FS_RID_NULL, FS_RID_NULL };
@@ -407,6 +424,8 @@ fs_error(LOG_INFO, "bind() branch");
 			}
 		    }
 		}
+                if (fs_lockable_lock(pt, LOCK_UN)) // free return value!
+                    return NULL;
 	    }
 	} else {
 #ifdef DEBUG_BRANCH
@@ -417,6 +436,8 @@ fs_error(LOG_INFO, "bind() branch");
 	    for (int p=0; p<pvl && count<limit; p++) {
 		fs_ptree *pt = fs_backend_get_ptree(be, pv->data[p], 1);
 		if (!pt) continue;
+                if (fs_lockable_lock(pt, LOCK_SH)) // free return value!
+                    return NULL;
 		for (int o=0; o<ovl && count<limit; o++) {
 		    fs_rid pk = ov->data[o];
 		    fs_rid pair[2] = { FS_RID_NULL, FS_RID_NULL };
@@ -438,6 +459,8 @@ fs_error(LOG_INFO, "bind() branch");
 			}
 		    }
 		}
+                if (fs_lockable_lock(pt, LOCK_UN)) // free return value!
+                    return NULL;
 	    }
 	}
     } else {
@@ -451,6 +474,8 @@ fs_error(LOG_INFO, "bind() branch");
                 fs_backend_ptree_limited_open(be, p);
 		fs_ptree *pt = be->ptrees_priv[p].ptree_s;
 		if (!pt) continue;
+                if (fs_lockable_lock(pt, LOCK_SH)) // free return value!
+                    return NULL;
 		for (int s=0; s<svl && count<limit; s++) {
 		    fs_rid pk = sv->data[s];
 		    fs_rid pair[2] = { FS_RID_NULL, FS_RID_NULL };
@@ -471,6 +496,8 @@ fs_error(LOG_INFO, "bind() branch");
 			}
 		    }
 		}
+                if (fs_lockable_lock(pt, LOCK_UN)) // free return value!
+                    return NULL;
 	    }
 	} else {
 #ifdef DEBUG_BRANCH
@@ -482,6 +509,8 @@ fs_error(LOG_INFO, "bind() branch");
                 fs_backend_ptree_limited_open(be, p);
 		fs_ptree *pt = be->ptrees_priv[p].ptree_o;
 		if (!pt) continue;
+                if (fs_lockable_lock(pt, LOCK_SH)) // free return value!
+                    return NULL;
 		for (int o=0; o<ovl && count<limit; o++) {
 		    fs_rid pk = ov->data[o];
 		    fs_rid pair[2] = { FS_RID_NULL, FS_RID_NULL };
@@ -502,6 +531,8 @@ fs_error(LOG_INFO, "bind() branch");
 			}
 		    }
 		}
+                if (fs_lockable_lock(pt, LOCK_UN)) // free return value!
+                    return NULL;
 	    }
 	}
     }
@@ -533,16 +564,13 @@ fs_rid_vector **fs_reverse_bind(fs_backend *be, fs_segment segment,
 {
     if (!(tobind & (FS_BIND_BY_SUBJECT | FS_BIND_BY_OBJECT))) {
 	fs_error(LOG_ERR, "tried to reverse_bind without s/o spec");
-
 	return NULL;
     } else if ((tobind & (FS_BIND_BY_SUBJECT | FS_BIND_BY_OBJECT)) ==
 	       (FS_BIND_BY_SUBJECT | FS_BIND_BY_OBJECT)) {
 	fs_error(LOG_ERR, "tried to reverse_bind with s+o spec set");
-
 	return NULL;
     } else if (tobind & FS_BIND_BY_OBJECT) {
 	fs_error(LOG_ERR, "tried to reverse bind by object");
-
 	return NULL;
     }
     double then = fs_time();
@@ -577,6 +605,7 @@ fs_rid_vector **fs_reverse_bind(fs_backend *be, fs_segment segment,
 
     fs_ptree_it *res_unsorted[iters];
     fs_ptree_it *res[iters];
+    fs_ptree *res_unlock[iters];
     for (int i=0; i<iters; i++) {
 	if (pv->length) {
 	    quad[2] = pv->data[i];
@@ -584,7 +613,7 @@ fs_rid_vector **fs_reverse_bind(fs_backend *be, fs_segment segment,
 	if (ov->length) {
 	    quad[3] = ov->data[i];
 	}
-	res_unsorted[i] = fs_backend_get_matches(be, quad, tobind & FS_BIND_SAME_MASK);
+	res_unsorted[i] = fs_backend_get_matches(be, quad, tobind & FS_BIND_SAME_MASK, &res_unlock[i]);
     }
     for (int i=0; i<iters; i++) {
 	int narrowest = 0;
@@ -619,7 +648,7 @@ fs_rid_vector **fs_reverse_bind(fs_backend *be, fs_segment segment,
 		}
 	    }
 	}
-	fs_ptree_it_free(res[i]);
+        fs_ptree_it_free(res[i]);
 	if (tobind & FS_BIND_MODEL) {
 	    if (mv) {
 		fs_rid_vector_free(mv);
@@ -637,6 +666,10 @@ fs_rid_vector **fs_reverse_bind(fs_backend *be, fs_segment segment,
 	    inter[1] = fs_rid_vector_new(0);
 	}
     }
+
+    for (int i=0; i<iters; i++)
+        if (res_unlock[i])
+            fs_lockable_locka(res_unlock[i], LOCK_UN);
 
     /* If we just need to bind subjects then we can use the intersection */
     if (cols == 1 && tobind & FS_BIND_SUBJECT) {
@@ -853,19 +886,26 @@ void fs_rid_vector_print_resolved(fs_backend *be, fs_rid_vector *v, int flags, F
 fs_data_size fs_get_data_size(fs_backend *be, int seg)
 {
     fs_data_size ret;
+    fs_data_size errret = { 0, 0, 0, 0, 0 };
 
     if (!be->ptrees_priv) {
 	fs_error(LOG_WARNING, "list unavailable");
-	fs_data_size errret = { 0, 0, 0, 0, 0 };
-
 	return errret;
     }
     ret.quads_s = 0;
     ret.quads_sr = 0;
     for (int i=0; i<be->ptree_length; i++) {
 	fs_backend_ptree_limited_open(be, i);
+        if (fs_lockable_lock(be->ptrees_priv[i].ptree_s, LOCK_SH))
+            return errret;
 	ret.quads_s += fs_ptree_count(be->ptrees_priv[i].ptree_s);
+        if (fs_lockable_lock(be->ptrees_priv[i].ptree_s, LOCK_UN))
+            return errret;
+        if (fs_lockable_lock(be->ptrees_priv[i].ptree_o, LOCK_SH))
+            return errret;
 	ret.quads_sr += fs_ptree_count(be->ptrees_priv[i].ptree_o);
+        if (fs_lockable_lock(be->ptrees_priv[i].ptree_o, LOCK_UN))
+            return errret;
     }
     ret.quads_o = -1;
     ret.resources = fs_rhash_count(be->res);

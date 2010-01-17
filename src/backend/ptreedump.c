@@ -60,7 +60,9 @@ int main(int argc, char *argv[])
 
             return 2;
         }
-        fs_ptree_print(tree, stdout, 0);
+        fs_lockable_lock(tree, LOCK_SH);
+        fs_ptree_print(tree, stdout, 0); 
+        fs_lockable_lock(tree, LOCK_SH);
         printf("\n");
         fs_ptree_close(tree);
     }
