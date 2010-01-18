@@ -4,10 +4,9 @@
 #include <assert.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <errno.h>
 #include "lockable.h"
 #include "common/error.h"
-
-extern int errno;
 
 #ifdef __linux__
 #define st_mtimespec st_mtim
