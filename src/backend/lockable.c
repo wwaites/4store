@@ -9,6 +9,10 @@
 
 extern int errno;
 
+#ifdef __linux__
+#define st_mtimespec st_mtim
+#endif
+
 /* flush any cached data to disc after writing out the required metadata */
 static int fs_lockable_sync(fs_lockable_t *hf)
 {
