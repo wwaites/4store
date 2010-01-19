@@ -177,7 +177,31 @@ static unsigned char * handle_commit_quad (fs_backend *be, fs_segment segment,
   int flags;
 
   memcpy(&flags, content, sizeof (flags));
+
+  /* handle_new_models can be called after starting an import, thus
+   * with a LOCK_EX or on its own which means we have to do it here */
+  int locking = 0;
+  if (fs_lockable_test(be->models, LOCK_UN)) {
+      locking = 1;
+      if (fs_lockable_lock(be->models, LOCK_EX))
+          return fsp_error_new(segment, "could not lock models");
+      if (fs_lockable_lock(be->predicates, LOCK_EX)) {
+          fs_lockable_lock(be->models, LOCK_UN);
+          return fsp_error_new(segment, "could not lock predicates");
+      }
+  }
+
   int ret = fs_quad_import_commit(be, segment, flags, 1);
+  
+  if (locking) {
+      if (fs_lockable_lock(be->predicates, LOCK_UN)) {
+          fs_lockable_lock(be->models, LOCK_UN);
+          return fsp_error_new(segment, "error releasing predicate lock");
+      }
+      if (fs_lockable_lock(be->models, LOCK_UN))
+          return fsp_error_new(segment, "error releasing model lock");
+  }
+
   if (ret) {
     fs_error(LOG_ERR, "commit_quad(%d) failed", segment);
     return fsp_error_new(segment, "quad commit failed");
@@ -361,6 +385,7 @@ static unsigned char * handle_start_import (fs_backend *be, fs_segment segment,
       return fsp_error_new(segment, "could not lock predicates");
   }
 
+  fs_error(LOG_INFO, "starting import...");
   fs_start_import(be, segment);
 
   return message_new(FS_DONE_OK, segment, 0);
