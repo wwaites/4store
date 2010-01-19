@@ -622,6 +622,8 @@ int fs_backend_unlink_indexes(fs_backend *be, fs_segment seg)
 	return 1;
     }
 
+    fs_assert(fs_lockable_test(be->models, (LOCK_SH|LOCK_EX)));
+
     for (int i=0; i<be->ptree_length; i++) {
 	fs_backend_ptree_limited_open(be, i);
 	fs_ptree_unlink(be->ptrees_priv[i].ptree_s);
@@ -635,10 +637,10 @@ int fs_backend_unlink_indexes(fs_backend *be, fs_segment seg)
 
     be->ptree_length = 0;
 
-    fs_rid_vector *models = fs_mhash_get_keys(be->models);
+    fs_rid_vector *models = fs_mhash_get_keys_r(be->models);
     for (int i=0; i<models->length; i++) {
 	fs_index_node val;
-	fs_mhash_get(be->models, models->data[i], &val);
+	fs_mhash_get_r(be->models, models->data[i], &val);
 	if (val == 1) {
 	    fs_tlist *tl = fs_tlist_open(be, models->data[i], O_RDWR);
 	    fs_tlist_unlink(tl);
