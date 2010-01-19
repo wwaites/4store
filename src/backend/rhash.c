@@ -48,7 +48,7 @@
 
 #define FS_PACKED __attribute__((__packed__))
 
-#define FS_RHASH_ENTRY(rh, rid) (((uint64_t)(rid >> 10) & ((uint64_t)(rh->size - 1)))*rh->bucket_size)
+#define FS_RHASH_ENTRY(rh, rid) (((uint64_t)(rid >> 10) & ((uint64_t)(rh->size - 1)))*rh->header->bucket_size)
 
 #define DISP_I_UTF8         'i'
 #define DISP_I_NUMBER       'N'
@@ -88,11 +88,7 @@ typedef struct _fs_rhash_entry {
 typedef struct _fs_rhash {
     fs_lockable_t hf;
     uint32_t size;
-    uint32_t count;
-    uint32_t search_dist;
-    uint32_t bucket_size;
-    uint32_t revision;
-    size_t mmap_size;
+    struct rhash_header *header;
     fs_rhash_entry *entries;
     FILE *lex_f;
     char *lex_filename;
@@ -110,6 +106,8 @@ typedef struct _fs_rhash {
 } fs_rhash;
 #define rh_fd hf.fd
 #define rh_flags hf.flags
+#define rh_mmap_addr hf.mmap_addr
+#define rh_mmap_size hf.mmap_size
 #define rh_filename hf.filename
 #define rh_read_metadata hf.read_metadata
 #define rh_write_metadata hf.write_metadata
@@ -124,7 +122,7 @@ static fs_rhash *global_sort_rh = NULL;
 
 static int double_size(fs_rhash *rh);
 
-static int fs_rhash_read_header(fs_lockable_t *);
+static int fs_rhash_remap(fs_lockable_t *);
 static int fs_rhash_write_header(fs_lockable_t *);
 static int fs_rhash_load_prefixes(fs_rhash *);
 
@@ -172,10 +170,6 @@ fs_lockable_t *fs_rhash_open_filename(const char *filename, int flags)
     rh->z_buffer_size = 1024;
     rh->z_buffer = malloc(rh->z_buffer_size);
     rh->rh_filename = g_strdup(filename);
-    rh->size = FS_RHASH_DEFAULT_LENGTH;
-    rh->search_dist = FS_RHASH_DEFAULT_SEARCH_DIST;
-    rh->bucket_size = FS_RHASH_DEFAULT_BUCKET_SIZE;
-    rh->revision = 1;
     rh->lex_filename = g_strdup_printf("%s.lex", filename);
 
     rh->rh_fd = open(filename, FS_O_NOATIME | flags, FS_FILE_MODE);
@@ -188,7 +182,7 @@ fs_lockable_t *fs_rhash_open_filename(const char *filename, int flags)
         return NULL;
     }
 
-    rh->rh_read_metadata = fs_rhash_read_header;
+    rh->rh_read_metadata = fs_rhash_remap;
     rh->rh_write_metadata = fs_rhash_write_header;
 
     if (fs_lockable_init(hf)) {
@@ -257,31 +251,6 @@ static int fs_rhash_do_lock(fs_lockable_t *hf, int operation)
     return 0;
 }
 
-static int fs_rhash_memremap(fs_rhash *rh) {
-    size_t mmap_size;
-
-    mmap_size = ((size_t)rh->size) * ((size_t)rh->bucket_size) * sizeof(fs_rhash_entry)
-              + sizeof(struct rhash_header); // otherwise not page aligned
-    if (mmap_size != rh->mmap_size) {
-        if (rh->mmap_size) {
-            if (munmap((void *)(rh->entries) - sizeof(struct rhash_header), rh->mmap_size)) {
-                fs_error(LOG_ERR, "munmap(%s): %s", rh->rh_filename, strerror(errno));
-                return -1;
-            }
-        }
-        rh->mmap_size = mmap_size;
-        rh->entries = mmap(NULL, rh->mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED,
-                           rh->rh_fd, 0) + sizeof(struct rhash_header);
-        if (rh->entries == MAP_FAILED) {
-            fs_error(LOG_ERR, "mmap(%s): %s", rh->rh_filename, strerror(errno));
-            rh->mmap_size = 0;
-            return -1;
-        }
-    }
-
-    return 0;
-}
-
 /* hook function for the prefix list's read_metadata */
 static int fs_rhash_prefix_read_metadata(fs_lockable_t *hf)
 {
@@ -315,35 +284,62 @@ static int fs_rhash_load_prefixes(fs_rhash *rh)
     return 0;
 }
 
-static int fs_rhash_read_header(fs_lockable_t *hf)
-{
+static int fs_rhash_remap(fs_lockable_t *hf) {
     fs_rhash *rh = (fs_rhash *)hf;
-    struct rhash_header header;
+    size_t size, bucket_size;
 
-    pread(rh->rh_fd, &header, sizeof(header), 0);
-    if (header.id != FS_RHASH_ID) {
-        fs_error(LOG_ERR, "%s does not appear to be a rhash file", rh->rh_filename);
-        return -1;
+    if (rh->header == NULL) { /* first time */
+        struct rhash_header header;
+        pread(rh->rh_fd, &header, sizeof(header), 0);
+        if (header.id != FS_RHASH_ID) {
+            fs_error(LOG_ERR, "%s does not appear to be a rhash file", rh->rh_filename);
+            return -1;
+        }
+        size = header.size;
+        bucket_size = header.bucket_size;
+    } else {
+        size = rh->header->size;
+        bucket_size = rh->header->bucket_size;
     }
 
-    rh->size = header.size;
-    rh->count = header.count;
-    rh->search_dist = header.search_dist;
-    rh->bucket_size = header.bucket_size;
-    if (rh->bucket_size == 0) {
-        rh->bucket_size = 1;
+    if ( (rh->header == NULL) || (rh->size != rh->header->size) ) {
+        if (rh->rh_mmap_addr > 0) {
+            if (munmap(rh->rh_mmap_addr, rh->rh_mmap_size)) {
+                fs_error(LOG_ERR, "munmap(%s): %s", rh->rh_filename, strerror(errno));
+                return -1;
+            }
+        }
+        rh->rh_mmap_size = size * bucket_size * sizeof(fs_rhash_entry)
+                         + sizeof(struct rhash_header); // otherwise not page aligned
+	rh->rh_mmap_addr = rh->header = mmap(NULL, rh->rh_mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, rh->rh_fd, 0);
+        if (rh->rh_mmap_addr == MAP_FAILED) {
+            fs_error(LOG_ERR, "mmap(%s): %s", rh->rh_filename, strerror(errno));
+            rh->rh_mmap_size = 0;
+            return -1;
+        }
+	rh->entries = (void *)rh->header + sizeof(struct rhash_header);
+	rh->size = rh->header->size;
+        if (rh->header->bucket_size == 0)
+	    rh->header->bucket_size = 1;
     }
-    rh->revision = header.revision;
 
-    return fs_rhash_memremap(rh);
+    return 0;
 }
 
 static void fs_rhash_ensure_size(fs_rhash *rh)
 {
+    off_t size, bucket_size;
+    if (rh->header == NULL) {  /* only the case if initialising a file */
+        size = FS_RHASH_DEFAULT_LENGTH;
+        bucket_size = FS_RHASH_DEFAULT_BUCKET_SIZE;
+    } else {
+        size = rh->header->size;
+        bucket_size = rh->header->bucket_size;
+    }
     /* skip if we're read-only */
     if (!(rh->rh_flags & (O_WRONLY | O_RDWR))) return;
 
-    const off_t len = sizeof(struct rhash_header) + ((off_t) rh->size) * ((off_t) rh->bucket_size) * sizeof(fs_rhash_entry);
+    const off_t len = sizeof(struct rhash_header) + size * bucket_size * sizeof(fs_rhash_entry);
 
     /* FIXME should use fallocate where it has decent performance,
        in order to avoid fragmentation */
@@ -360,19 +356,22 @@ static int fs_rhash_write_header(fs_lockable_t *hf)
     fs_rhash *rh = (fs_rhash *)hf;
     struct rhash_header header;
 
-    header.id = FS_RHASH_ID;
-    header.size = rh->size;
-    header.count = rh->count;
-    header.search_dist = rh->search_dist;
-    header.bucket_size = rh->bucket_size;
-    header.revision = rh->revision;
-    memset(&header.padding, 0, sizeof(header.padding));
-    if (pwrite(rh->rh_fd, &header, sizeof(header), 0) == -1) {
-        fs_error(LOG_CRIT, "failed to write header on %s: %s",
-                 rh->rh_filename, strerror(errno));
-        return 1;
+    /* only necessary if we are initialising the file */
+    if (rh->rh_mmap_addr == NULL) {
+        header.id = FS_RHASH_ID;
+        header.count = 0;
+        header.size = rh->size = FS_RHASH_DEFAULT_LENGTH;
+        header.search_dist = FS_RHASH_DEFAULT_SEARCH_DIST;
+        header.bucket_size = FS_RHASH_DEFAULT_BUCKET_SIZE;
+        header.revision = 1;
+        memset(&header.padding, 0, sizeof(header.padding));
+        if (pwrite(rh->rh_fd, &header, sizeof(header), 0) == -1) {
+            fs_error(LOG_CRIT, "failed to write header on %s: %s",
+                     rh->rh_filename, strerror(errno));
+            return 1;
+        }
+        fs_rhash_ensure_size(rh);
     }
-    fs_rhash_ensure_size(rh);
 
     if (rh->lex_f) {
         fflush(rh->lex_f);
@@ -401,7 +400,7 @@ int fs_rhash_close(fs_lockable_t *hf)
         g_free(rh->prefix_strings[i]);
     }
 
-    munmap((void *)(rh->entries) - sizeof(struct rhash_header), rh->mmap_size);
+    munmap((void *)(rh->entries) - sizeof(struct rhash_header), rh->rh_mmap_size);
     close(rh->rh_fd);
     free(rh);
 
@@ -426,15 +425,16 @@ int fs_rhash_put_r(fs_lockable_t *hf, fs_resource *res)
 
     fs_assert(fs_lockable_test(hf, LOCK_EX));
 
-    if (entry >= rh->size * rh->bucket_size) {
+    if (entry >= rh->size * rh->header->bucket_size) {
         fs_error(LOG_CRIT, "tried to write into rhash '%s' with bad entry number %d",
                  rh->rh_filename, entry);
         return 1;
     }
+
     fs_rhash_entry *buffer = rh->entries + entry;
 
     int new = -1;
-    for (int i= 0; i < rh->search_dist && entry + i < rh->size * rh->bucket_size; i++) {
+    for (int i= 0; i < rh->header->search_dist && entry + i < rh->size * rh->header->bucket_size; i++) {
         if (buffer[i].rid == res->rid) {
             /* resource is already there, we're done */
             // TODO could check for collision
@@ -453,7 +453,7 @@ int fs_rhash_put_r(fs_lockable_t *hf, fs_resource *res)
         return fs_rhash_put_r(hf, res);
     }
 
-    if (new >= rh->size * rh->bucket_size) {
+    if (new >= rh->size * rh->header->bucket_size) {
         fs_error(LOG_CRIT, "writing RID %016llx past end of rhash '%s'", res->rid, rh->rh_filename);
     }
 
@@ -602,7 +602,7 @@ int fs_rhash_put_r(fs_lockable_t *hf, fs_resource *res)
         e.val.offset = pos;
     }
     rh->entries[new] = e;
-    rh->count++;
+    rh->header->count++;
 
     return 0;
 }
@@ -628,29 +628,30 @@ static int double_size(fs_rhash *rh)
 
     fs_error(LOG_INFO, "doubling rhash (%s)", rh->rh_filename);
 
-    rh->size *= 2;
+    /* update the size in the header */
+    rh->header->size *= 2;
     fs_rhash_ensure_size(rh);
     
-    if (fs_rhash_memremap(rh))
+    if (fs_rhash_remap((fs_lockable_t *)rh))
         return -1;
 
     fs_rhash_entry blank;
     memset(&blank, 0, sizeof(blank));
-    fs_rhash_entry buffer_hi[rh->bucket_size];
+    fs_rhash_entry buffer_hi[rh->header->bucket_size];
 
-    for (long int i=0; i<oldsize * rh->bucket_size; i += rh->bucket_size) {
+    for (long int i=0; i<oldsize * rh->header->bucket_size; i += rh->header->bucket_size) {
         memset(buffer_hi, 0, sizeof(buffer_hi));
         fs_rhash_entry * const from = rh->entries + i;
-        for (int j=0; j < rh->bucket_size; j++) {
+        for (int j=0; j < rh->header->bucket_size; j++) {
             if (from[j].rid == 0) continue;
 
             long int entry = FS_RHASH_ENTRY(rh, from[j].rid);
-            if (entry >= oldsize * rh->bucket_size) {
+            if (entry >= oldsize * rh->header->bucket_size) {
                 buffer_hi[j] = from[j];
                 from[j] = blank;
             }
         }
-        memcpy(from + (oldsize * rh->bucket_size), buffer_hi, sizeof(buffer_hi));
+        memcpy(from + (oldsize * rh->header->bucket_size), buffer_hi, sizeof(buffer_hi));
     }
 
     return errs;
@@ -850,14 +851,14 @@ int fs_rhash_get_r(fs_lockable_t *hf, fs_resource *res)
 
     fs_assert(fs_lockable_test(hf, (LOCK_SH|LOCK_EX)));
 
-    for (int k = 0; k < rh->search_dist; ++k) {
+    for (int k = 0; k < rh->header->search_dist; ++k) {
         if (buffer[k].rid == res->rid) {
             return get_entry(rh, &buffer[k], res);
         }
     }
 
     fs_error(LOG_WARNING, "resource %016llx not found in § 0x%x-0x%x of %s",
-             res->rid, entry, entry + rh->search_dist - 1, rh->rh_filename);
+             res->rid, entry, entry + rh->header->search_dist - 1, rh->rh_filename);
     res->lex = g_strdup_printf("¡resource %llx not found!", res->rid);
     res->attr = 0;
 
@@ -913,11 +914,11 @@ void fs_rhash_print_r(fs_lockable_t *hf, FILE *out, int verbosity)
 
     fprintf(out, "%s\n", rh->rh_filename);
     fprintf(out, "size:     %d (buckets)\n", rh->size);
-    fprintf(out, "bucket:   %d\n", rh->bucket_size);
-    fprintf(out, "entries:  %d\n", rh->count);
+    fprintf(out, "bucket:   %d\n", rh->header->bucket_size);
+    fprintf(out, "entries:  %d\n", rh->header->count);
     fprintf(out, "prefixes:  %d\n", rh->prefix_count);
-    fprintf(out, "revision: %d\n", rh->revision);
-    fprintf(out, "fill:     %.1f%%\n", 100.0 * (double)rh->count / (double)(rh->size * rh->bucket_size));
+    fprintf(out, "revision: %d\n", rh->header->revision);
+    fprintf(out, "fill:     %.1f%%\n", 100.0 * (double)rh->header->count / (double)(rh->size * rh->header->bucket_size));
 
     if (verbosity < 1) {
         return;
@@ -937,7 +938,7 @@ void fs_rhash_print_r(fs_lockable_t *hf, FILE *out, int verbosity)
     lseek(rh->rh_fd, sizeof(struct rhash_header), SEEK_SET);
     while (read(rh->rh_fd, &e, sizeof(e)) == sizeof(e)) {
         if (e.rid) {
-            char *ent_str = g_strdup_printf("%08d.%02d", entry / rh->bucket_size, entry % rh->bucket_size);
+            char *ent_str = g_strdup_printf("%08d.%02d", entry / rh->header->bucket_size, entry % rh->header->bucket_size);
             fs_resource res = { .lex = NULL };
             int ret = get_entry(rh, &e, &res);
             if (ret) {
@@ -959,10 +960,10 @@ void fs_rhash_print_r(fs_lockable_t *hf, FILE *out, int verbosity)
         }
         entry++;
     }
-    fprintf(out, "STATS: length: %d, bsize: %d, entries: %d (%+d), %.1f%% full\n", rh->size, rh->bucket_size, entries, rh->count - entries, 100.0 * (double)entries / (double)(rh->size * rh->bucket_size));
-    if (rh->count != entries) {
+    fprintf(out, "STATS: length: %d, bsize: %d, entries: %d (%+d), %.1f%% full\n", rh->size, rh->header->bucket_size, entries, rh->header->count - entries, 100.0 * (double)entries / (double)(rh->size * rh->header->bucket_size));
+    if (rh->header->count != entries) {
         fprintf(out, "ERROR: entry count in header %d != count from scan %d\n",
-                rh->count, entries);
+                rh->header->count, entries);
     }
     fprintf(out, "Disposition frequencies:\n");
     for (int d=0; d<128; d++) {
@@ -975,7 +976,7 @@ void fs_rhash_print_r(fs_lockable_t *hf, FILE *out, int verbosity)
 int fs_rhash_count(fs_lockable_t *hf)
 {
     fs_rhash *rh = (fs_rhash *)hf;
-    return rh->count;
+    return rh->header->count;
 }
 
 /* literal storage compression functions */

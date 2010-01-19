@@ -8,6 +8,8 @@ typedef struct _fs_lockable_t {
     int fd;
     int flags;
     int locktype;
+    void *mmap_addr;
+    int mmap_size;
     char *filename;
     struct timespec mtime;
     int (*lock)(struct _fs_lockable_t *, int operation); // internal, do not use directly
