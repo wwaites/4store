@@ -4,10 +4,14 @@
 #include <assert.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
+#include <errno.h>
 #include "lockable.h"
 #include "common/error.h"
 
-extern int errno;
+#ifdef __linux__
+#define st_mtimespec st_mtim
+#endif
 
 /* flush any cached data to disc after writing out the required metadata */
 static int fs_lockable_sync(fs_lockable_t *hf)
@@ -19,8 +23,13 @@ static int fs_lockable_sync(fs_lockable_t *hf)
     if (hf->write_metadata && (hf->write_metadata)(hf))
         return -1;
     /* flush data to disc */
-    if (fs_fsync(hf->fd)) {
-        fs_error(LOG_ERR, "flock(%s): %s", hf->filename, strerror(errno));
+    if (hf->mmap_addr > 0) {
+        if (msync(hf->mmap_addr, hf->mmap_size, MS_ASYNC)) {
+	    fs_error(LOG_ERR, "msync(%s): %s", hf->filename, strerror(errno));
+	    return -1;
+	}
+    } else if (fs_fsync(hf->fd)) {
+        fs_error(LOG_ERR, "fsync(%s): %s", hf->filename, strerror(errno));
         return -1;
     }
     return 0;
@@ -81,7 +90,13 @@ static int fs_lockable_do_lock(fs_lockable_t *hf, int operation)
             fs_error(LOG_ERR, "fstat(%s): %s", hf->filename, strerror(errno));
             return -1;
         }
-        if ( (stat.st_mtimespec.tv_sec > hf->mtime.tv_sec) ||
+	/* for mmaped files, let them figure out if they should remap */
+	if (hf->mmap_addr > 0) {
+	    if ( (hf->read_metadata)(hf) )
+	        return -1;
+	}
+	/* block files we need to check the mtime to see if we should update */
+        else if ( (stat.st_mtimespec.tv_sec > hf->mtime.tv_sec) ||
              ( (stat.st_mtimespec.tv_sec == hf->mtime.tv_sec) &&
                (stat.st_mtimespec.tv_nsec > hf->mtime.tv_nsec) ) ) {
            if ( (hf->read_metadata)(hf) )

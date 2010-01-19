@@ -457,8 +457,8 @@ static int fs_list_sort_chunk(fs_list *l, off_t start, off_t length, int (*comp)
                      MAP_FILE | MAP_SHARED, l->l_fd, start * l->width);
     if (map == (void *)-1) {
         fs_error(LOG_ERR, "failed to map '%s', %lld+%lld for sort: %s",
-                 l->l_filename, (long long)start * l->width,
-                 (long long)length * l->width, strerror(errno));
+                 l->l_filename, (long long)(start * l->width),
+                 (long long)(length * l->width), strerror(errno));
 
         return 1;
     }

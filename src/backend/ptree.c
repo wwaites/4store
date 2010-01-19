@@ -97,6 +97,8 @@ struct _fs_ptree {
 #define pt_fd l.fd
 #define pt_flags l.flags
 #define pt_filename l.filename
+#define pt_mmap_addr l.mmap_addr
+#define pt_mmap_size l.mmap_size
 #define pt_read_metadata l.read_metadata
 #define pt_write_metadata l.write_metadata
 
@@ -147,7 +149,8 @@ node *node_ref(fs_ptree *pt, nodeid n)
 
 static int map_file(fs_ptree *pt)
 {
-    pt->ptr = mmap(NULL, pt->file_length, PROT_READ | PROT_WRITE, MAP_SHARED, pt->pt_fd, 0);
+    pt->pt_mmap_addr = pt->ptr = mmap(NULL, pt->file_length, PROT_READ | PROT_WRITE, MAP_SHARED, pt->pt_fd, 0);
+    pt->pt_mmap_size = pt->file_length;
     if (pt->ptr == (void *)-1) {
         fs_error(LOG_ERR, "failed to mmap '%s'", pt->pt_filename);
         return -1;
@@ -161,7 +164,7 @@ static int map_file(fs_ptree *pt)
 static int remap_file(fs_lockable_t *l)
 {
     fs_ptree *pt = (fs_ptree *)l;
-    off_t len = lseek(pt->pt_fd, 0, SEEK_END);
+    off_t len = lseek(pt->pt_fd, 0, SEEK_END); // lseek vs fstat?
     if (len != pt->file_length) {
         munmap(pt->ptr, pt->file_length);
         pt->file_length = len;

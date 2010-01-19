@@ -279,7 +279,7 @@ fs_index_node fs_chain_add_quad(fs_chain *bc, fs_index_node b, fs_rid quad[4])
     }
 
     fs_rid_bucket *rb = (fs_rid_bucket *)&(bc->data[b]);
-    fs_index_node oldb;
+    fs_index_node oldb = 0;
     while (rb->length + 4 > FS_RID_BUCKET_DATA_LEN && b != 0) {
         if (rb->length > FS_RID_BUCKET_DATA_LEN) {
             fs_error(LOG_CRIT, "sanity check failed for bucket %d: length"
