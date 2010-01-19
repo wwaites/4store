@@ -385,7 +385,6 @@ static unsigned char * handle_start_import (fs_backend *be, fs_segment segment,
       return fsp_error_new(segment, "could not lock predicates");
   }
 
-  fs_error(LOG_INFO, "starting import...");
   fs_start_import(be, segment);
 
   return message_new(FS_DONE_OK, segment, 0);
