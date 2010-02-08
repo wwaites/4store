@@ -525,7 +525,8 @@ int fs_list_sort_chunked_r(fs_lockable_t *hf, int (*comp)(const void *, const vo
         if (length > CHUNK_SIZE/l->width) length = CHUNK_SIZE/l->width;
         int ret = fs_list_sort_chunk(l, c, length, comp);
         if (ret) {
-            fs_error(LOG_ERR, "chunked sort failed at chunk %ld", c / (CHUNK_SIZE/l->width));
+            fs_error(LOG_ERR, "chunked sort failed at chunk %ld",
+									(long int)(c / (CHUNK_SIZE/l->width)));
             return ret;
         }
     }
