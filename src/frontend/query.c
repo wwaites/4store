@@ -229,6 +229,8 @@ fs_query_state *fs_query_init(fsp_link *link)
     qs->rasqal_world = rasqal_new_world();
     if (!qs->rasqal_world) {
         fs_error(LOG_ERR, "failed to allocate rasqal world");
+	fs_query_fini(qs);
+	return NULL;
     }
     if (rasqal_world_open(qs->rasqal_world)) {
         fs_error(LOG_ERR, "failed to intialise rasqal world");
@@ -275,7 +277,7 @@ int fs_query_fini(fs_query_state *qs)
     if (qs) {
 #ifdef HAVE_RASQAL_WORLD
         if(qs->rasqal_world)
-          rasqal_free_world(qs->rasqal_world);
+            rasqal_free_world(qs->rasqal_world);
 #endif /* HAVE_RASQAL_WORLD */
         free(qs->bind_cache);
         g_static_mutex_free(&qs->cache_mutex);
