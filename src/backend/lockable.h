@@ -22,8 +22,15 @@ int fs_lockable_lock_debug(fs_lockable_t *, int operation, const char *, int);
 
 #define fs_lockable_lock(l, op) fs_lockable_lock_debug((fs_lockable_t *)l, op, __FILE__, __LINE__)
 /* acquire the lock if we do not already have it */
-#define fs_lockable_locka(l, op) ( (((fs_lockable_t *)l)->locktype == op) || \
-                                   fs_lockable_lock_debug((fs_lockable_t *)l, op, __FILE__, __LINE__))
+static inline int fs_lockable_locka_debug(fs_lockable_t *l, int op, 
+				const char *file, int line)
+{
+		if (l->locktype != op)
+				return fs_lockable_lock_debug(l, op, file, line);
+		return 0;
+}
+#define fs_lockable_locka(l, op) fs_lockable_locka_debug((fs_lockable_t *)l, op, __FILE__, __LINE__)
+
 /* returns 1 if the type of lock specified by op is held, otherwise 0 */
 #define fs_lockable_test(l, op) ((((fs_lockable_t *)l)->locktype & op) ? 1 : 0)
 
