@@ -322,6 +322,7 @@ static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 	fs_rid quad[4];
 	fs_rid pred = FS_RID_NULL;
 	fs_ptree *current_tree = NULL;
+	fs_ptree *previous_tree = NULL;
         //fs_lockable_lock(be->predicates, LOCK_EX); locked by transaction...
 	for (int i=0; i<FS_PENDED_LISTS; i++) {
 	    fs_lockable_lock(be->pended[i], LOCK_EX); /* XXX retval */
@@ -344,16 +345,23 @@ static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 			fs_error(LOG_CRIT, "failed to create ptree for %016llx",
 				 pred);
 		    }
+		    if (current_tree != previous_tree) {
+                        if (previous_tree)
+                            fs_lockable_lock(previous_tree, LOCK_UN);
+                        fs_lockable_lock(current_tree, LOCK_EX);
+                        previous_tree = current_tree;
+                    }
 		}
 		fs_rid pair[2] = { quad[0], quad[3] };
-                fs_lockable_lock(current_tree, LOCK_EX); // XX performance
 		fs_ptree_add(current_tree, quad[1], pair, 0);
-                fs_lockable_lock(current_tree, LOCK_UN);
 	    }
+            if (current_tree)
+                fs_lockable_lock(current_tree, LOCK_UN);
 
 	    /* process O ptrees */
 	    pred = FS_RID_NULL;
 	    current_tree = NULL;
+            previous_tree = NULL;
 	    fs_list_rewind_r(be->pended[i]);
 	    fs_list_sort_chunked_r(be->pended[i], quad_sort_by_poms);
 	    while (fs_list_next_sort_uniqed_r(be->pended[i], quad)) {
@@ -365,11 +373,17 @@ static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 				 pred);
 		    }
 		}
+		if (current_tree != previous_tree) {
+                    if (previous_tree)
+                        fs_lockable_lock(previous_tree, LOCK_UN);
+                    fs_lockable_lock(current_tree, LOCK_EX);
+                    previous_tree = current_tree;
+                }
 		fs_rid pair[2] = { quad[0], quad[1] };
-                fs_lockable_lock(current_tree, LOCK_EX); // XX performance
 		fs_ptree_add(current_tree, quad[3], pair, 0);
-                fs_lockable_lock(current_tree, LOCK_UN);
 	    }
+            if (current_tree)
+                fs_lockable_lock(current_tree, LOCK_UN);
 
 	    /* cleanup pended lists */
 	    fs_list_unlink(be->pended[i]);
