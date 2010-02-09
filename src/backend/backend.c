@@ -677,7 +677,9 @@ int fs_backend_unlink_indexes(fs_backend *be, fs_segment seg)
 
     /* TODO remove TList support or cleaner impl. here */
     char *command = g_strdup_printf("rm -f "FS_TLIST_ALL, be->db_name, be->segment);
-    system(command);
+    if (system(command)) {
+        fs_error(LOG_ERR, "system(%s): %s", command, strerror(errno));
+    }
     g_free(command);
 
     return 0;

@@ -65,8 +65,10 @@ static int write_header(fs_tlist *l)
     header.id = TLIST_ID;
     header.length = l->offset;
     lseek(l->fd, 0, SEEK_SET);
-    write(l->fd, &header, HEADER);
-
+    if (write(l->fd, &header, HEADER) != HEADER) {
+        fs_error(LOG_ERR, "write failed: %s", strerror(errno));
+        return -1;
+    }
     return 0;
 }
 

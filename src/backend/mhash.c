@@ -295,19 +295,22 @@ static int double_size(fs_mhash *mh)
     memset(&blank, 0, sizeof(blank));
     for (int i=0; i<oldsize; i++) {
         fs_mhash_entry e;
-        pread(mh->mh_fd, &e, sizeof(e), sizeof(struct mhash_header) + i * sizeof(e));
+        if (pread(mh->mh_fd, &e, sizeof(e), sizeof(struct mhash_header) + i * sizeof(e)) != sizeof(e)) {
+            fs_error(LOG_ERR, "pread failed: %s", strerror(errno));
+            errs ++;
+        }
         if (e.rid == 0) continue;
         int entry = FS_MHASH_ENTRY(mh, e.rid);
         if (entry >= oldsize) {
             if (pwrite(mh->mh_fd, &blank, sizeof(blank),
-                       sizeof(struct mhash_header) + i * sizeof(e)) == -1) {
+                       sizeof(struct mhash_header) + i * sizeof(e)) != sizeof(blank)) {
                 fs_error(LOG_CRIT, "failed to write mhash '%s' entry: %s",
                          mh->mh_filename, strerror(errno));
                 errs++;
             }
             if (pwrite(mh->mh_fd, &e, sizeof(e),
                        sizeof(struct mhash_header) +
-                       (oldsize+i) * sizeof(e)) == -1) {
+                       (oldsize+i) * sizeof(e)) != sizeof(blank)) {
                 fs_error(LOG_CRIT, "failed to write mhash '%s' entry: %s",
                          mh->mh_filename, strerror(errno));
                 errs++;

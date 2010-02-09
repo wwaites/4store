@@ -290,7 +290,10 @@ static int fs_rhash_remap(fs_lockable_t *hf) {
 
     if (rh->header == NULL) { /* first time */
         struct rhash_header header;
-        pread(rh->rh_fd, &header, sizeof(header), 0);
+        if (pread(rh->rh_fd, &header, sizeof(header), 0) != sizeof(header)) {
+            fs_error(LOG_ERR, "pread failed: %s", strerror(errno));
+            return -1;
+        }
         if (header.id != FS_RHASH_ID) {
             fs_error(LOG_ERR, "%s does not appear to be a rhash file", rh->rh_filename);
             return -1;
