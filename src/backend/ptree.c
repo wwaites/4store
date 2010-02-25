@@ -175,10 +175,9 @@ static int remap_file(fs_lockable_t *l)
 
 fs_ptree *fs_ptree_open_filename(const char *filename, int flags, fs_ptable *chain)
 {
-    struct ptree_header header;
     if (sizeof(struct ptree_header) != 512) {
         fs_error(LOG_CRIT, "incorrect ptree header size %zd, should be 512",
-                 sizeof(header));
+                 sizeof(struct ptree_header));
 
         return NULL;
     }
@@ -691,8 +690,9 @@ int fs_ptree_remove(fs_ptree *pt, fs_rid pk, fs_rid pair[2])
 
     nodeid lid = get_leaf(pt, pk);
     if (!lid) {
-        fs_error(LOG_ERR, "leaf for pk %016llx not found", pk);
-        return 1;
+        /* the leaf doesn't exist, so it doesn't need to be deleted */
+    
+        return 0;
     }
     leaf *lref = LEAF_REF(pt, lid);
     if (!lref->block) {

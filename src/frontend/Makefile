@@ -16,7 +16,7 @@ endif
 
 # PROFILE = -pg
 CFLAGS = -std=gnu99 -fno-strict-aliasing -Wall -Wstrict-prototypes $(PROFILE) -g -O2 -I./ -I../ $(DEFINES) $(readedit_cflags) -DGIT_REV=\"$(gitrev)\" `pkg-config --cflags rasqal glib-2.0 libxml-2.0` `pcre-config --cflags`
-LDFLAGS = $(ldfdarwin) $(ldflinux) $(PROFILE) `pkg-config --libs rasqal glib-2.0 libxml-2.0 $(avahi)` `pcre-config --libs`
+LDFLAGS = $(ldfdarwin) $(ldflinux) $(PROFILE) `pkg-config --libs rasqal raptor glib-2.0 libxml-2.0 $(avahi)` `pcre-config --libs`
 
 all: $(BINS) $(test_BINS)
 

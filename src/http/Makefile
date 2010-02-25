@@ -9,7 +9,7 @@ FRONTEND = ../frontend/query-cache.o ../frontend/query-datatypes.o ../frontend/q
 
 # PROFILE = -pg
 CFLAGS = -std=gnu99 -Wall -Werror -Wstrict-prototypes $(PROFILE) -g -O2 -I./ -I../ $(DEFINES) -DGIT_REV=\"$(gitrev)\" `pkg-config --cflags rasqal glib-2.0 libxml-2.0 gthread-2.0`
-LDFLAGS = $(ldfdarwin) $(ldflinux) $(PROFILE) `pkg-config --libs rasqal glib-2.0 libxml-2.0 gthread-2.0 $(avahi)`
+LDFLAGS = $(ldfdarwin) $(ldflinux) $(PROFILE) `pkg-config --libs rasqal raptor glib-2.0 libxml-2.0 gthread-2.0 $(avahi)`
 
 all: $(BINS) $(test_BINS)
 
