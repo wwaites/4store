@@ -689,6 +689,11 @@ int fs_tbchain_it_next(fs_tbchain_it *it, fs_rid triple[3])
             if (it->superset) {
                 if (it->tbc->be) {
                     fs_ptree *pt = fs_backend_get_ptree(it->tbc->be, triple[1], 0);
+		    int lock = 0;
+		    if (!fs_lockable_test(pt, (LOCK_SH|LOCK_EX))) {
+			fs_lockable_lock(pt, LOCK_SH);
+			lock = 1;
+		    }
                     fs_rid pair[2] = { it->model, triple[2] };
                     fs_ptree_it *pit = fs_ptree_search(pt, triple[0], pair);
                     if (pit) {
@@ -700,6 +705,8 @@ int fs_tbchain_it_next(fs_tbchain_it *it, fs_rid triple[3])
                     } else {
                         ok = 0;
                     }
+		    if (lock)
+			fs_lockable_lock(pt, LOCK_UN);
                 } else {
                     fs_error(LOG_ERR, "backend pointer missing from tbchain, "
                              "returning superset of results");
