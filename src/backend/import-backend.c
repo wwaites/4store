@@ -430,7 +430,7 @@ int fs_delete_quads(fs_backend *be, fs_rid_vector *quads[4])
 		fs_ptree_remove(sfp, quads[3]->data[i], opair);
 	    }
 	}
-	fs_lockable_lock(sfp, LOCK_UN);
+	fs_lockable_lock(ofp, LOCK_UN);
 	fs_lockable_lock(sfp, LOCK_UN);
     }
     fs_rid_set_free(preds);
