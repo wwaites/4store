@@ -152,7 +152,7 @@ static int map_file(fs_ptree *pt)
     pt->pt_mmap_addr = pt->ptr = mmap(NULL, pt->file_length, PROT_READ | PROT_WRITE, MAP_SHARED, pt->pt_fd, 0);
     pt->pt_mmap_size = pt->file_length;
     if (pt->ptr == (void *)-1) {
-        fs_error(LOG_ERR, "failed to mmap '%s'", pt->pt_filename);
+        fs_error(LOG_ERR, "mmap('%s', %lu): %s", pt->pt_filename, pt->file_length, strerror(errno));
         return -1;
     }
     pt->header = pt->ptr;
@@ -166,89 +166,18 @@ static int remap_file(fs_lockable_t *l)
     fs_ptree *pt = (fs_ptree *)l;
     off_t len = lseek(pt->pt_fd, 0, SEEK_END); // lseek vs fstat?
     if (len != pt->file_length) {
-        munmap(pt->ptr, pt->file_length);
+        if (pt->ptr)
+            munmap(pt->ptr, pt->file_length);
         pt->file_length = len;
         return map_file(pt);
     }
     return 0;
 }
 
-fs_ptree *fs_ptree_open_filename(const char *filename, int flags, fs_ptable *chain)
-{
-    if (sizeof(struct ptree_header) != 512) {
-        fs_error(LOG_CRIT, "incorrect ptree header size %zd, should be 512",
-                 sizeof(struct ptree_header));
-
-        return NULL;
-    }
-
-    fs_ptree *pt = calloc(1, sizeof(fs_ptree));
-    fs_lockable_t *l = (fs_lockable_t *)pt;
-    pt->pt_fd = open(filename, FS_O_NOATIME | flags, FS_FILE_MODE);
-    pt->pt_flags = flags;
-    if (pt->pt_fd == -1) {
-        fs_error(LOG_ERR, "cannot open ptree file '%s': %s", filename, strerror(errno));
-        free(pt);
-        return NULL;
-    }
-    pt->pt_filename = g_strdup(filename);
-    pt->table = chain;
-
-    pt->pt_read_metadata = remap_file;
-    if (fs_lockable_init(l)) {
-        g_free(pt->pt_filename);
-        close(pt->pt_fd);
-        free(pt);
-        return NULL;
-    }
-   
-    pt->file_length = lseek(pt->pt_fd, 0, SEEK_END);
-    if ((flags & O_TRUNC) || pt->file_length == 0) {
-        if (fs_lockable_lock(l, LOCK_EX) || fs_ptree_write_header(pt)) {
-            g_free(pt->pt_filename); 
-            close(pt->pt_fd);
-            free(pt);
-            return NULL;
-        } 
-    } else {
-        if (fs_lockable_lock(l, LOCK_SH), map_file(pt)) {
-            g_free(pt->pt_filename);
-            close(pt->pt_fd);
-            free(pt);
-            return NULL;
-        }
-    }
-    if (fs_lockable_lock(l, LOCK_UN)) {
-        g_free(pt->pt_filename);
-        close(pt->pt_fd);
-        free(pt);
-        return NULL;
-    }
-
-    if (pt->header->id != FS_PTREE_ID) {
-        fs_error(LOG_ERR, "%s does not appear to be a ptree file", pt->pt_filename);
-        g_free(pt->pt_filename);
-        close(pt->pt_fd);
-        free(pt);
-        return NULL;
-    }
-
-    if (pt->header->revision != FS_PTREE_REVISION) {
-        fs_error(LOG_ERR, "%s is not a revision %d ptree", pt->pt_filename, FS_PTREE_REVISION);
-        g_free(pt->pt_filename);
-        close(pt->pt_fd);
-        free(pt);
-        return NULL;
-    }
-    
-    return pt;
-}
-
-int fs_ptree_write_header(fs_ptree *pt)
+static int init_file(fs_lockable_t *l)
 {
     struct ptree_header header;
-
-    fs_assert(fs_lockable_test(pt, LOCK_EX));
+    fs_ptree *pt = (fs_ptree *)l;
 
     memset(&header, 0, sizeof(header));
     header.id = FS_PTREE_ID;
@@ -288,6 +217,57 @@ int fs_ptree_write_header(fs_ptree *pt)
     }
 
     return 0;
+}
+
+fs_ptree *fs_ptree_open_filename(const char *filename, int flags, fs_ptable *chain)
+{
+    if (sizeof(struct ptree_header) != 512) {
+        fs_error(LOG_CRIT, "incorrect ptree header size %zd, should be 512",
+                 sizeof(struct ptree_header));
+
+        return NULL;
+    }
+
+    fs_ptree *pt = calloc(1, sizeof(fs_ptree));
+    fs_lockable_t *l = (fs_lockable_t *)pt;
+    pt->pt_fd = open(filename, FS_O_NOATIME | flags, FS_FILE_MODE);
+    pt->pt_flags = flags;
+    if (pt->pt_fd == -1) {
+        fs_error(LOG_ERR, "cannot open ptree file '%s': %s", filename, strerror(errno));
+        free(pt);
+        return NULL;
+    }
+    pt->pt_filename = g_strdup(filename);
+    pt->table = chain;
+
+    pt->pt_read_metadata = remap_file;
+    pt->pt_write_metadata = init_file;
+    if (fs_lockable_init(l)) {
+        g_free(pt->pt_filename);
+        close(pt->pt_fd);
+        free(pt);
+        return NULL;
+    }
+    /* init_file is only for new, or truncated files */
+    pt->pt_write_metadata = NULL;
+   
+    if (pt->header->id != FS_PTREE_ID) {
+        fs_error(LOG_ERR, "%s does not appear to be a ptree file", pt->pt_filename);
+        g_free(pt->pt_filename);
+        close(pt->pt_fd);
+        free(pt);
+        return NULL;
+    }
+
+    if (pt->header->revision != FS_PTREE_REVISION) {
+        fs_error(LOG_ERR, "%s is not a revision %d ptree", pt->pt_filename, FS_PTREE_REVISION);
+        g_free(pt->pt_filename);
+        close(pt->pt_fd);
+        free(pt);
+        return NULL;
+    }
+    
+    return pt;
 }
 
 static int fs_ptree_grow_nodes(fs_ptree *pt)
