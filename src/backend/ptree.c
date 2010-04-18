@@ -152,7 +152,7 @@ static int map_file(fs_ptree *pt)
     pt->pt_mmap_addr = pt->ptr = mmap(NULL, pt->file_length, PROT_READ | PROT_WRITE, MAP_SHARED, pt->pt_fd, 0);
     pt->pt_mmap_size = pt->file_length;
     if (pt->ptr == (void *)-1) {
-        fs_error(LOG_ERR, "mmap('%s', %lu): %s", pt->pt_filename, pt->file_length, strerror(errno));
+        fs_error(LOG_ERR, "mmap('%s', %lu): %s", pt->pt_filename, (unsigned long)pt->file_length, strerror(errno));
         return -1;
     }
     pt->header = pt->ptr;
