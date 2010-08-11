@@ -59,6 +59,8 @@ struct _fs_backend {
     float min_free;
 };
 
+struct ptree_ref *fs_backend_ptree_ref(fs_backend *be, int n);
+
 #endif
 
 /* vi:set ts=8 sts=4 sw=4: */

@@ -274,6 +274,8 @@ int fs_start_import(fs_backend *be, int seg)
 
 void fs_backend_ptree_limited_open(fs_backend *be, int n)
 {
+    fs_assert(fs_lockable_test(be->predicates, (LOCK_SH|LOCK_EX)));
+
     if (be->ptrees_priv[n].ptree_s) return;
 
     if (be->ptree_open_count >= FS_MAX_OPEN_PTREES) {
@@ -304,6 +306,8 @@ void fs_backend_ptree_limited_open(fs_backend *be, int n)
 static int fs_commit(fs_backend *be, fs_segment seg, int force_trans)
 {
     fs_rid_set *rs = NULL;
+
+    fs_assert(fs_lockable_test(be->predicates, LOCK_EX));
 
     fs_lockable_lock(be->pending_delete, LOCK_EX);
     if (fs_list_length_r(be->pending_delete) > 0) {
@@ -493,6 +497,8 @@ struct ptree_ref *fs_backend_ptree_ref(fs_backend *be, int n)
 
 fs_ptree *fs_backend_get_ptree(fs_backend *be, fs_rid pred, int object)
 {
+    fs_assert(fs_lockable_test(be->predicates, (LOCK_SH|LOCK_EX)));
+
     long int id = (long int)g_hash_table_lookup(be->rid_id_map, &pred);
     /* if the the lookup function returns 0, it could mean item 0, or that it's
      * not there */
@@ -507,6 +513,8 @@ fs_ptree *fs_backend_get_ptree(fs_backend *be, fs_rid pred, int object)
 
 int fs_backend_open_ptree(fs_backend *be, fs_rid pred)
 {
+    fs_assert(fs_lockable_test(be->predicates, (LOCK_SH|LOCK_EX)));
+
     if (be->ptree_length == be->ptree_size) {
 	be->ptree_size *= 2;
 	be->ptrees_priv = realloc(be->ptrees_priv, be->ptree_size * sizeof(struct ptree_ref));
@@ -636,7 +644,8 @@ int fs_backend_unlink_indexes(fs_backend *be, fs_segment seg)
 	return 1;
     }
 
-    fs_assert(fs_lockable_test(be->models, (LOCK_SH|LOCK_EX)));
+    fs_assert(fs_lockable_test(be->models, LOCK_EX));
+    fs_assert(fs_lockable_test(be->predicates, LOCK_EX));
 
     for (int i=0; i<be->ptree_length; i++) {
 	fs_backend_ptree_limited_open(be, i);

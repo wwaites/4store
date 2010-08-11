@@ -288,13 +288,18 @@ static unsigned char * handle_delete_models (fs_backend *be, fs_segment segment,
       model_lock = 1;
       if (fs_lockable_lock(be->models, LOCK_EX))
           return fsp_error_new(segment, "could not lock models");
+      if (fs_lockable_lock(be->predicates, LOCK_EX)) {
+          fs_lockable_lock(be->models, LOCK_UN);
+          return fsp_error_new(segment, "count not lock predicates");
+      }
   }
 
   fs_delete_models(be, segment, &models);
 
   if (model_lock) {
-      if(fs_lockable_lock(be->models, LOCK_UN))
-         return fsp_error_new(segment, "could not unlock models");
+      if (fs_lockable_lock(be->predicates, LOCK_UN) ||
+          fs_lockable_lock(be->models, LOCK_UN))
+         return fsp_error_new(segment, "could not unlock storage");
   }
 
   return message_new(FS_DONE_OK, segment, 0);
@@ -708,6 +713,9 @@ static unsigned char * handle_bind_limit (fs_backend *be, fs_segment segment,
 
   fs_rid_vector **bindings;
 
+  if (fs_lockable_lock(be->predicates, LOCK_SH)) {
+    return fsp_error_new(segment, "could not lock predicates");
+  }
   bindings = fs_bind(be, segment, flags,
                      &models, &subjects, &predicates, &objects, offset, limit);
 
@@ -733,6 +741,8 @@ static unsigned char * handle_bind_limit (fs_backend *be, fs_segment segment,
       data += bindings[k]->length * 8;
     }
   }
+
+  fs_lockable_lock(be->predicates, LOCK_UN);
 
   for (k = 0; k < cols; ++k) {
     fs_rid_vector_free(bindings[k]);
@@ -792,6 +802,10 @@ static unsigned char * handle_reverse_bind (fs_backend *be, fs_segment segment,
 
   objects.data = (fs_rid *) content;
 
+  if (fs_lockable_lock(be->predicates, LOCK_SH)) {
+    return fsp_error_new(segment, "could not lock predicates");
+  }
+
   fs_rid_vector **bindings;
   bindings = fs_reverse_bind(be, segment, flags, &models, &subjects, &predicates, &objects, offset, limit);
 
@@ -821,6 +835,8 @@ static unsigned char * handle_reverse_bind (fs_backend *be, fs_segment segment,
       data += bindings[k]->length * 8;
     }
   }
+
+  fs_lockable_lock(be->predicates, LOCK_UN);
 
   for (k = 0; k < cols; ++k) {
     fs_rid_vector_free(bindings[k]);

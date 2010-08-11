@@ -892,23 +892,33 @@ fs_data_size fs_get_data_size(fs_backend *be, int seg)
 	fs_error(LOG_WARNING, "list unavailable");
 	return errret;
     }
+    if (fs_lockable_lock(be->models, LOCK_SH)) {
+        fs_error(LOG_ERR, "unable to lock models");
+        return errret;
+    }
+    if (fs_lockable_lock(be->predicates, LOCK_SH)) {
+        fs_error(LOG_ERR, "unable to lock predicates");
+        fs_lockable_lock(be->models, LOCK_UN);
+        return errret;
+    }
     ret.quads_s = 0;
     ret.quads_sr = 0;
     for (int i=0; i<be->ptree_length; i++) {
 	fs_backend_ptree_limited_open(be, i);
         if (fs_lockable_lock(be->ptrees_priv[i].ptree_s, LOCK_SH))
-            return errret;
+            goto err;
 	ret.quads_s += fs_ptree_count(be->ptrees_priv[i].ptree_s);
         if (fs_lockable_lock(be->ptrees_priv[i].ptree_s, LOCK_UN))
-            return errret;
+            goto err;
         if (fs_lockable_lock(be->ptrees_priv[i].ptree_o, LOCK_SH))
-            return errret;
+            goto err;
 	ret.quads_sr += fs_ptree_count(be->ptrees_priv[i].ptree_o);
         if (fs_lockable_lock(be->ptrees_priv[i].ptree_o, LOCK_UN))
-            return errret;
+            goto err;
     }
     ret.quads_o = -1;
     ret.resources = fs_rhash_count(be->res);
+
     if (be->models) {
 	ret.models_s = fs_mhash_count(be->models);
     } else {
@@ -916,7 +926,14 @@ fs_data_size fs_get_data_size(fs_backend *be, int seg)
     }
     ret.models_o = -1;
 
+ unlock:
+    fs_lockable_lock(be->predicates, LOCK_UN);
+    fs_lockable_lock(be->models, LOCK_UN);
     return ret;
+ err:
+    fs_error(LOG_ERR, "error unlocking resource");
+    ret = errret;
+    goto unlock;
 }
 
 /* vi:set ts=8 sts=4 sw=4: */

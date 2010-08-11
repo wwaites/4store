@@ -296,13 +296,15 @@ int fs_quad_import_commit(fs_backend *be, int seg, int flags, int account)
 		    pt = NULL;
 		    pt = fs_backend_get_ptree(be, pred, pass);
 		    if (!pt) {
-			fs_backend_open_ptree(be, pred);
-			int id = fs_list_add_r(be->predicates, &pred);
-			if (pass == 0) pt = be->ptrees_priv[id].ptree_s;
-			else pt = be->ptrees_priv[id].ptree_o;
+                        int n = fs_backend_open_ptree(be, pred);
+                        struct ptree_ref *r = fs_backend_ptree_ref(be, n);
+                        fs_list_add_r(be->predicates, &pred);
+			if (pass == 0) pt = r->ptree_s;
+			else pt = r->ptree_o;
 		    }
 		    last_pred = pred;
 		}
+                fs_assert(pt);
 		int ds0, ds1, pk;
 		if (pass == 0) {
 		    ds0 = 0; ds1 = 3; pk = 1;

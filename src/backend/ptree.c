@@ -252,7 +252,7 @@ fs_ptree *fs_ptree_open_filename(const char *filename, int flags, fs_ptable *cha
     pt->pt_write_metadata = NULL;
    
     if (pt->header->id != FS_PTREE_ID) {
-        fs_error(LOG_ERR, "%s does not appear to be a ptree file", pt->pt_filename);
+        fs_error(LOG_ERR, "%s does not appear to be a ptree file (%08x)", pt->pt_filename, pt->header->id);
         g_free(pt->pt_filename);
         close(pt->pt_fd);
         free(pt);
